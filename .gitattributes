@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Preserve the pinned evaluator byte-for-byte.
+elt_tinker/upstream/eva_stage2.py -text

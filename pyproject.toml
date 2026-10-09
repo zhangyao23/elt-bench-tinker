@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elt-tinker"
+version = "0.1.0"
+description = "Execution-verified ELT-Bench environments and a Tinker RL recipe"
+license = "CC-BY-SA-4.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["duckdb>=1.2", "pandas>=2.2", "numpy>=1.26", "sqlglot>=30", "requests>=2.32", "PyYAML>=6"]
+
+[project.optional-dependencies]
+snowflake = ["snowflake-connector-python[pandas]>=3.17"]
+sources = ["psycopg[binary]>=3.2", "pymongo>=4.10", "boto3>=1.35", "pyarrow>=18"]
+dev = ["pytest>=8", "ruff>=0.9"]
+training = ["tinker-cookbook @ https://github.com/thinking-machines-lab/tinker-cookbook/archive/1c03a20fdda98156ccbec15728c0e2764b5a0bc3.zip"]
+
+[project.scripts]
+elt-local-test = "elt_tinker.local_integration:main"
+elt-replay = "elt_tinker.replay:main"
+elt-train = "elt_tinker.recipe:main"
+
+[tool.setuptools.packages.find]
+include = ["elt_tinker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["elt_tinker/upstream", "vendor", "materials"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

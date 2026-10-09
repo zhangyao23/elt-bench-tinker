@@ -1,0 +1,7 @@
+{
+  "postgres": {"host": "127.0.0.1", "port": 58433, "user": "elt", "password_env": "ELT_POSTGRES_PASSWORD"},
+  "mongodb_uri_env": "ELT_MONGODB_URI",
+  "api_url": "http://127.0.0.1:58505",
+  "s3": {"endpoint_url": "http://127.0.0.1:58466", "region_name": "us-west-2", "aws_access_key_id": "test", "aws_secret_access_key": "test"},
+  "http_files": {"driver": "data/official/shipping/source_snapshot/driver.parquet"}
+}

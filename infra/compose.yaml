@@ -1,0 +1,30 @@
+name: elt-tinker-shipping
+services:
+  postgres:
+    image: library/postgres@sha256:65b16a8b326e0cfbdf33fa7e783f2a0cb352a61448616ccccfd616ef42aa0f65
+    ports:
+    - 127.0.0.1:58433:5432
+    environment:
+      POSTGRES_USER: elt
+      POSTGRES_PASSWORD: local_test_only
+      POSTGRES_DB: shipping
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U elt -d shipping
+      interval: 5s
+      retries: 20
+  mongodb:
+    image: library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+    ports:
+    - 127.0.0.1:58717:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: elt
+      MONGO_INITDB_ROOT_PASSWORD: local_test_only
+  s3:
+    image: localstack/localstack@sha256:f1db6c829fd3ab8db21007e91f62b6f76396722fcbaf6d223a8110f42482fd7e
+    ports:
+    - 127.0.0.1:58466:4566
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-west-2
