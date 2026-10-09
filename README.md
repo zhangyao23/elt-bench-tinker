@@ -4,6 +4,8 @@
 
 ## 当前验收边界
 
+三项真实运行证据来自保留的v0.1基线标签 `starter-baseline-20261010`。v0.2开发分支已修复SQL接口、增加ISO日期/实际类型/工具状态反馈和默认关闭的字段覆盖检查；新版本的本地验证见docs/verification.md，尚未进行新的模型A/B或RL更新。
+
 | 验收 | 状态 |
 |---|---|
 | 无凭据 integration | CSV/DuckDB/错误修复/独立进程重放已通过；见 docs/verification.md |
@@ -24,6 +26,8 @@ uv pip install --python .venv/Scripts/python.exe -e .
 ```
 
 每次使用新的 output 目录。成功输出包含 correct/wrong 两个 pipeline、tool_trace、grade、新进程 independent_replay，以及 acceptance.json。它会真正执行 CSV extraction、DuckDB load、错误 SQL、修复、提交与评分。正确 reward=1、错误 total 列 reward=0.75。新进程 replay 只读取任务包和保存的 pipeline，不继承原 Episode。
+
+v0.2可用 `--field-feedback` 在transform后查看公开字段覆盖和实际仓库类型；默认关闭。该检查增加一次 `LIMIT 0` 元数据查询，不读取hidden参考，也不改变终局reward。字段齐全不代表数值正确。工具反馈的 `created_models` 记录已成功创建的要求模型，工具调用余量不等于模型轮数或token余量。
 
 ```powershell
 .venv/Scripts/python.exe -m pytest tests/test_integration.py tests/test_reward_security.py -q
@@ -89,6 +93,8 @@ recipe 获取公开 rate card，按全部允许调用的最坏上下文/生成/�
 
 独立 replay：
 
+真实recipe也支持 `--field-feedback`，该选项会记录在training.json并传入每个独立Episode。评估其作用时固定模型/数据/采样配置，仅在同一修复版间切换此选项；不要从旧4B与新9B调试结果推断它的效果。
+
 ```powershell
 .venv/Scripts/python.exe -m elt_tinker.replay --public data/official/shipping/public --hidden data/official/shipping/hidden --pipeline runs/official_rollout_01/batch_0/episode_0/pipeline.json --operator-config infra/source_config.example.json --output runs/replay_01
 ```
@@ -100,6 +106,7 @@ SDK 0.32的Datum/TensorData使用dataclass；本项目显式保存数值数据�
 - docs/guide_steps_1_2.md：原理、官方 shipping、状态/工具、论文差异、reward 与 GRPO。
 - docs/implementation_design.md：提交用简洁设计草稿。
 - docs/verification.md：回归、安全边界、性能与待验证限制。
+- docs/review_v0_2.md：新版本Standards/Spec两轴审查及覆盖问题修复。
 - docs/improvement_plan.md：提交前接口修复、检查门禁和字段反馈对照计划；不计作已完成实验。
 - TASK_STATE.md：仅本地保存的工作状态与恢复记录，不上传 GitHub；仓库验收说明见 docs/verification.md。
 - THIRD_PARTY.md：固定版本来源、许可证与贡献边界。
