@@ -51,6 +51,7 @@ class Episode:
         max_calls: int = 48,
         *,
         field_feedback: bool = False,
+        condition_feedback: bool = True,
     ):
         self.task, self.destination, self.output = task, destination, Path(output)
         self.operator_config = operator_config or {}
@@ -64,6 +65,7 @@ class Episode:
         self.timings: list[dict] = []
         self.max_calls = max_calls
         self.field_feedback = field_feedback
+        self.condition_feedback = condition_feedback
         self.done = self.submitted = False
         self.invalid_reason: str | None = None
         self.grade: dict | None = None
@@ -151,7 +153,10 @@ class Episode:
                 "extra_columns": sorted(actual_names - required_names),
                 "coverage_complete": not missing,
                 "values_verified": False,
-                "condition_review": public_condition_warnings(model, statement.expression),
+                "condition_review": (
+                    public_condition_warnings(model, statement.expression)
+                    if self.condition_feedback else []
+                ),
             }
         except ValueError as error:
             # SQL already executed and was recorded; a failed inspection must not undo it.

@@ -62,3 +62,25 @@ def test_condition_hint_is_nonblocking_and_does_not_add_reward(tmp_path):
         assert episode.act("submit_pipeline", {})["result"]["reward"] == 1
     finally:
         episode.close()
+
+
+def test_condition_switch_changes_only_public_hints(tmp_path):
+    task = local_task(tmp_path / "task")
+    task.spec["models"][0]["columns"][-1]["description"] = "Number of orders in 2020."
+    schemas, rewards = [], []
+    for enabled in (False, True):
+        episode = Episode(
+            task, "duckdb", tmp_path / str(enabled),
+            field_feedback=True, condition_feedback=enabled,
+        )
+        try:
+            load_all(episode)
+            response = episode.act("transform", {"sql": GOOD_SQL})
+            schema = dict(response["result"]["output_schema"])
+            hints = schema.pop("condition_review")
+            assert bool(hints) == enabled
+            schemas.append(schema)
+            rewards.append(episode.act("submit_pipeline", {})["result"]["reward"])
+        finally:
+            episode.close()
+    assert schemas[0] == schemas[1] and rewards == [1, 1]

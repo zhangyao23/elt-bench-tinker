@@ -25,6 +25,20 @@ from elt_tinker.errors import InfrastructureError
 from elt_tinker.task import Task, read_json, write_json
 
 
+class SeededSamplingClient:
+    """Keep cookbook completion unchanged; attach a reproducible per-request seed."""
+
+    def __init__(self, client, seed: int):
+        self.client, self.next_seed = client, seed
+
+    async def sample_async(self, **kwargs):
+        kwargs["sampling_params"] = kwargs["sampling_params"].model_copy(
+            update={"seed": self.next_seed}
+        )
+        self.next_seed += 1
+        return await self.client.sample_async(**kwargs)
+
+
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["rollout", "train"], required=True)
@@ -54,6 +68,14 @@ def arguments():
         help="Six-row previews, accurate model-turn warnings and short submission reserve",
     )
     parser.add_argument(
+        "--no-condition-feedback", dest="condition_feedback", action="store_false",
+        help="Disable public-year review hints while retaining field coverage feedback",
+    )
+    parser.add_argument(
+        "--seed", type=int,
+        help="Rollout-only sampling seed; each request uses seed + request index",
+    )
+    parser.add_argument(
         "--max-cost-usd",
         type=float,
         required=True,
@@ -73,6 +95,8 @@ async def run(args):
         raise ValueError("Require 1 <= steps <= max-batches and 1 <= group-size <= 8")
     if args.mode == "train" and args.group_size < 2:
         raise ValueError("Centered GRPO requires at least two independent rollouts")
+    if args.seed is not None and (args.mode != "rollout" or args.seed < 0):
+        raise ValueError("A nonnegative seed is supported only for single-rollout evaluation")
     if not 1 <= args.max_turns <= 32 or not 64 <= args.generation_tokens <= 4096:
         raise ValueError("Require 1..32 turns and 64..4096 generation tokens per turn")
     if (
@@ -141,6 +165,8 @@ async def run(args):
         "generation_tokens": args.generation_tokens,
         "field_feedback": args.field_feedback,
         "compact_feedback": args.compact_feedback,
+        "condition_feedback": args.condition_feedback,
+        "sampling_seed": args.seed,
         "generation_reserve_tokens": min(128, args.generation_tokens) if args.compact_feedback else args.generation_tokens,
         "status": "started",
         "batches": [],
@@ -202,9 +228,11 @@ async def run(args):
                 args.generation_tokens,
                 field_feedback=args.field_feedback,
                 compact_feedback=args.compact_feedback,
+                condition_feedback=args.condition_feedback,
             )
             policy = TinkerTokenCompleter(
-                sampling_client,
+                SeededSamplingClient(sampling_client, args.seed)
+                if args.seed is not None else sampling_client,
                 max_tokens=args.generation_tokens,
                 context_window=args.context_tokens,
             )

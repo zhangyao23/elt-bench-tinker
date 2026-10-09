@@ -268,3 +268,60 @@ def test_actual_completer_clips_generation_to_context_without_service():
         assert result.tokens == [1] and seen == [200]
 
     asyncio.run(exercise())
+
+
+def test_seed_adapter_preserves_native_completion_and_request_parameters():
+    from types import SimpleNamespace
+
+    from tinker_cookbook.completers import TinkerTokenCompleter
+
+    from elt_tinker.recipe import SeededSamplingClient
+
+    seen = []
+
+    class RecordingClient:
+        async def sample_async(self, *, prompt, num_samples, sampling_params):
+            seen.append((prompt, num_samples, sampling_params))
+            return SimpleNamespace(sequences=[SimpleNamespace(
+                tokens=[1], logprobs=[-0.5], stop_reason="stop",
+            )])
+
+    async def exercise():
+        policy = TinkerTokenCompleter(
+            SeededSamplingClient(RecordingClient(), 20261010),
+            max_tokens=512, context_window=3000,
+        )
+        prompt = tinker.ModelInput.from_ints([1] * 2800)
+        for _ in range(2):
+            result = await policy(prompt, stop=[2])
+            assert result.tokens == [1] and result.logprobs == [-0.5]
+        assert [params.seed for _, _, params in seen] == [20261010, 20261011]
+        for actual_prompt, count, params in seen:
+            assert actual_prompt is prompt and count == 1
+            assert params.max_tokens == 200 and params.temperature == 1
+            assert params.stop == [2] and params.top_p == 1 and params.top_k == -1
+
+    asyncio.run(exercise())
+
+
+def test_ablation_flags_reach_episode_without_service(tmp_path, monkeypatch):
+    from elt_tinker.recipe import arguments
+
+    monkeypatch.setattr("sys.argv", [
+        "elt-train", "--mode", "rollout", "--model", "unit-model",
+        "--public", "public", "--hidden", "hidden", "--destination", "duckdb",
+        "--output", "run", "--max-cost-usd", "1", "--field-feedback",
+        "--no-condition-feedback", "--seed", "20261010",
+    ])
+    args = arguments()
+    assert args.field_feedback and not args.condition_feedback
+    assert not args.compact_feedback and args.seed == 20261010
+    builder = ELTGroupBuilder(
+        local_task(tmp_path / "task"), "duckdb", tmp_path / "run", None, 1, {},
+        field_feedback=args.field_feedback, condition_feedback=args.condition_feedback,
+    )
+    try:
+        episode = builder._create_episode(0)
+        assert episode.field_feedback and not episode.condition_feedback
+    finally:
+        asyncio.run(builder.cleanup())

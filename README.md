@@ -97,6 +97,8 @@ recipe 获取公开 rate card，按全部允许调用的最坏上下文/生成/�
 
 真实recipe也支持 `--field-feedback`，该选项会记录在training.json并传入每个独立Episode。评估其作用时固定模型/数据/采样配置，仅在同一修复版间切换此选项；不要从旧4B与新9B调试结果推断它的效果。
 
+`--no-condition-feedback` 可在保留字段覆盖反馈时单独关闭公开年份提示。单rollout评估可使用 `--seed 20261010`，每次采样传入seed加请求序号；训练模式拒绝此选项，以保留组内独立采样。上下文压缩/年份提示三组对照见 docs/ablation_protocol.md。
+
 ```powershell
 .venv/Scripts/python.exe -m elt_tinker.replay --public data/official/shipping/public --hidden data/official/shipping/hidden --pipeline runs/official_rollout_01/batch_0/episode_0/pipeline.json --operator-config infra/source_config.example.json --output runs/replay_01
 ```

@@ -193,6 +193,7 @@ class ELTGroupBuilder(EnvGroupBuilder):
         *,
         field_feedback: bool = False,
         compact_feedback: bool = False,
+        condition_feedback: bool = True,
     ):
         self.task, self.destination, self.output, self.renderer = (
             task,
@@ -203,6 +204,7 @@ class ELTGroupBuilder(EnvGroupBuilder):
         self.group_size, self.operator_config = group_size, operator_config
         self.field_feedback = field_feedback
         self.compact_feedback = compact_feedback
+        self.condition_feedback = condition_feedback
         self.max_turns, self.context_tokens, self.generation_tokens = (
             max_turns,
             context_tokens,
@@ -233,6 +235,7 @@ class ELTGroupBuilder(EnvGroupBuilder):
             self.output / f"episode_{index}",
             self.operator_config,
             field_feedback=self.field_feedback,
+            condition_feedback=self.condition_feedback,
         )
         # Track it in the same sync operation, even if the awaiting caller is cancelled.
         self.episodes.append(episode)
