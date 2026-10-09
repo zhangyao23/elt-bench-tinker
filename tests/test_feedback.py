@@ -237,3 +237,34 @@ def test_cookbook_and_recipe_expose_field_feedback_without_cloud_calls(tmp_path,
         assert result["result"]["output_schema"]["coverage_complete"]
     finally:
         asyncio.run(builder.cleanup())
+
+
+def test_empty_output_has_schema_but_is_not_task_success(tmp_path):
+    episode = Episode(local_task(tmp_path / "task"), "duckdb", tmp_path / "run", field_feedback=True)
+    try:
+        load_all(episode)
+        sql = "CREATE TABLE models.summary AS SELECT id, name, 0 AS total, 0 AS num_orders FROM raw.customers WHERE 1 = 0"
+        result = episode.act("transform", {"sql": sql})
+        schema = result["result"]["output_schema"]
+        assert schema["coverage_complete"] and not schema["values_verified"]
+        assert result["state"]["created_models"] == ["summary"]
+        assert episode.act("submit_pipeline", {})["result"]["reward"] == 0
+        assert not episode.grade["all_models_match"]
+    finally:
+        episode.close()
+
+
+def test_repeated_transform_counts_statements_and_unique_models(tmp_path):
+    episode = Episode(local_task(tmp_path / "task"), "duckdb", tmp_path / "run", field_feedback=True)
+    try:
+        load_all(episode)
+        for count in (1, 2):
+            result = episode.act("transform", {"sql": GOOD_SQL})
+            assert result["state"]["successful_transform_statements"] == count
+            assert result["state"]["created_models"] == ["summary"]
+            assert result["result"]["output_schema"]["coverage_complete"]
+            assert not result["result"]["output_schema"]["values_verified"]
+        assert not episode.submitted and episode.grade is None
+        assert episode.act("submit_pipeline", {})["result"]["reward"] == 1
+    finally:
+        episode.close()

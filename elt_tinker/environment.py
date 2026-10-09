@@ -58,6 +58,7 @@ class Episode:
         self.configured: dict[str, dict] = {}
         self.loaded: set[str] = set()
         self.sql: list[str] = []
+        self.created_models: set[str] = set()
         self.trace: list[dict] = []
         self.timings: list[dict] = []
         self.max_calls = max_calls
@@ -120,8 +121,7 @@ class Episode:
             "provenance": self.task.spec.get("provenance", {}),
         }
 
-    def _output_schema_feedback(self, sql: str) -> dict | None:
-        target = sqlglot.parse_one(sql, read=self.warehouse.dialect).this
+    def _output_schema_feedback(self, target: exp.Table) -> dict | None:
         model = next(
             (m for m in self.task.spec["models"] if m["name"].lower() == target.name.lower()),
             None,
@@ -193,11 +193,14 @@ class Episode:
             }
         if action == "transform":
             sql = self.sql_for(arguments["sql"], transform=True)
+            target = sqlglot.parse_one(sql, read=self.warehouse.dialect).this
             model_sql(self.warehouse, sql)
             self.sql.append(arguments["sql"])
+            if target.name.lower() in {model["name"].lower() for model in self.task.spec["models"]}:
+                self.created_models.add(target.name.lower())
             feedback = {"executed": True, "pipeline_statements": len(self.sql)}
             if self.field_feedback:
-                schema_feedback = self._output_schema_feedback(sql)
+                schema_feedback = self._output_schema_feedback(target)
                 if schema_feedback is not None:
                     feedback["output_schema"] = schema_feedback
             return feedback
@@ -236,6 +239,7 @@ class Episode:
             "configured_sources": sorted(self.configured),
             "loaded_sources": sorted(self.loaded),
             "successful_transform_statements": len(self.sql),
+            "created_models": sorted(self.created_models),
             "tool_calls_used": calls_used,
             "tool_calls_remaining": max(0, self.max_calls - calls_used),
             "submitted": self.submitted,
