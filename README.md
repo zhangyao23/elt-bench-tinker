@@ -29,6 +29,8 @@ uv pip install --python .venv/Scripts/python.exe -e .
 
 v0.2可用 `--field-feedback` 在transform后查看公开字段覆盖和实际仓库类型；默认关闭。该检查增加一次 `LIMIT 0` 元数据查询，不读取hidden参考，也不改变终局reward。字段齐全不代表数值正确。工具反馈的 `created_models` 记录已成功创建的要求模型，工具调用余量不等于模型轮数或token余量。
 
+v0.3增加默认关闭的 `--compact-feedback`：模型收到最多6行的明确预览和真实剩余模型轮数，完整30行/错误仍保存在tool_trace，实际展示视图保存在messages/trajectory。它将环境的提前终止预留缩为128 token，实际Tinker completer仍按生成上限和剩余context取最小值；不扩大上下文、预算或自动提交。`--field-feedback`另提供公开年份条件review提醒：只查description与SQL literal，可能误提醒或漏报，不是值正确验证，也不改变reward。
+
 ```powershell
 .venv/Scripts/python.exe -m pytest tests/test_integration.py tests/test_reward_security.py -q
 .venv/Scripts/ruff.exe check elt_tinker tests scripts infra

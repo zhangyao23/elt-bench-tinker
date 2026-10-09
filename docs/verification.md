@@ -75,3 +75,13 @@ SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组�
 - 新增GitHub Actions使用锁定本地依赖、固定Actions SHA、只读权限、构建wheel、无凭据测试及项目外独立replay。不安装Tinker/cookbook、不配置云凭据；可选测试的skip数会公开显示。只有实际workflow完成才能报告远程CI通过。
 
 新版本没有新增Tinker采样/训练，也没有证明模型任务成功率提高。原三项真实运行证据与新接口/反馈验证分开报告。
+
+## 2026-10-10 真实试运行与上下文修复
+
+v0.2另完成两条真实官方shipping模型rollout：关闭field feedback在20轮因context_overflow未submit/R0；开启模式16轮submit/R0.9375（15/16），独立Snowflake进程重放相同。唯一错误drivers.num_shipments_2017使用COUNT(*)统计全部年份；这些各一次随机样本不能证明反馈效果。private evidence为runs/v2_paid_test_20261010/results.json，原共同预算累计保守预留8.905724928美元，未超过10美元，未追加RL更新。
+
+v0.3用默认关闭的compact选项限制模型视图、显示固定cookbook真实轮数，并以128替代全额生成token的提前终止预留；真实completer的context clipping和原费用上界仍生效。没有删历史或人工提交；raw工具trace与实际模型messages分开保留。公开年份review仅读spec，非阻塞、不改reward；间接年份表达式和无关literal均为限制。
+
+离线重渲染原始off历史：最终prompt21460tokens，compact16232，减少5228；原4096预留触发overflow，compact的128预留不触发。on历史18462→15871。typed ToolCall从真实已保存action_tokens恢复，没有eval repr；这些修改后的观察及旧logprobs没有用于训练。证据runs/context_fix_20261010/offline_diagnosis.json；不是新采样或成功率证据。
+
+76项本地回归/Ruff通过，包含真实DuckDB+native renderer的大结果截断、显式提交、两模式action-only mask/logprobs及completer上下文裁剪。Standards/Spec两轴未发现阻塞；局部code-simplification审查未要求扩大重构，保留固定桥接边界。依赖/upstream/evaluator无修改。真实效果应单独按预算验证。
