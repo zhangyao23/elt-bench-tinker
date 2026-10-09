@@ -5,13 +5,14 @@ import io
 import json
 import os
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 import sqlglot
 from sqlglot import exp
 
-from elt_tinker.errors import InfrastructureError
+from elt_tinker.errors import InfrastructureError, SQLPolicyError
 from elt_tinker.sources import SourceReader
 from elt_tinker.task import Task, fingerprint, safe_child, write_json
 from elt_tinker.upstream.eva_stage2 import check_corretness, sort_by_keys
@@ -31,6 +32,12 @@ def safe_error(error: Exception) -> str:
 
 def csv_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.read_csv(io.StringIO(frame.to_csv(index=False)), dtype=str, keep_default_na=True)
+
+
+def feedback_value(value):
+    if isinstance(value, (date, datetime)):
+        return None if pd.isna(value) else value.isoformat()
+    return value
 
 
 class Episode:
@@ -59,7 +66,7 @@ class Episode:
     def initial_prompt(self) -> str:
         return (
             "Solve this ELT task with tools. Inspect task and schemas, configure_load each source, "
-            "then run_load. Use transform with one CREATE OR REPLACE TABLE/VIEW <model> AS SELECT "
+            "then run_load. Use transform with one CREATE OR REPLACE TABLE/VIEW models.<model> AS SELECT "
             "per call; read sources as raw.<table>, outputs as models.<table>. Query actual data "
             "and repair SQL errors. Call submit_pipeline to finish; a final message alone does "
             "not submit. Scoring verifies loaded raw content, replays on an empty warehouse, "
@@ -140,7 +147,8 @@ class Episode:
             )
             return {
                 "columns": list(frame.columns),
-                "rows": json.loads(frame.to_json(orient="records")),
+                "column_types": frame.attrs.get("column_types", {}),
+                "rows": json.loads(frame.map(feedback_value).to_json(orient="records")),
             }
         if action == "transform":
             model_sql(self.warehouse, self.sql_for(arguments["sql"], transform=True))
@@ -162,13 +170,38 @@ class Episode:
         except InfrastructureError as error:
             self.invalid_reason, self.done = safe_error(error), True
             result = {"ok": False, "error": self.invalid_reason, "error_kind": "infrastructure"}
+        except SQLPolicyError as error:
+            result = {
+                "ok": False,
+                "error": safe_error(error),
+                "error_kind": "action",
+                "error_category": "sql_policy",
+            }
         except (KeyError, ValueError, TypeError, sqlglot.errors.ParseError) as error:
             result = {"ok": False, "error": safe_error(error), "error_kind": "action"}
         except Exception as error:
             self.invalid_reason, self.done = f"Environment failure ({type(error).__name__})", True
             result = {"ok": False, "error": self.invalid_reason, "error_kind": "infrastructure"}
+        calls_used = len(self.trace) + 1
+        if calls_used >= self.max_calls:
+            self.done = True
+        state = {
+            "configured_sources": sorted(self.configured),
+            "loaded_sources": sorted(self.loaded),
+            "successful_transform_statements": len(self.sql),
+            "tool_calls_used": calls_used,
+            "tool_calls_remaining": max(0, self.max_calls - calls_used),
+            "submitted": self.submitted,
+            "ended": self.done,
+        }
+        result["state"] = state
         if len(json.dumps(result, default=str)) > 12000:
-            result = {"ok": False, "error": "Feedback exceeds 12k; select fewer/smaller columns"}
+            result = {
+                "ok": False,
+                "error": "Feedback exceeds 12k; select fewer/smaller columns",
+                "error_kind": "action",
+                "state": state,
+            }
         self.trace.append(
             {
                 "tool": action,
@@ -177,8 +210,6 @@ class Episode:
                 "seconds": time.monotonic() - started,
             }
         )
-        if len(self.trace) >= self.max_calls:
-            self.done = True
         write_json(self.output / "tool_trace.json", self.trace)
         return result
 

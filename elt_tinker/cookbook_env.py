@@ -78,7 +78,7 @@ class ELTTools:
 
     @tool
     async def transform(self, sql: str):
-        """Run one CREATE OR REPLACE TABLE/VIEW <model> AS SELECT; raw.<source>, models.<output>."""
+        """Run one CREATE OR REPLACE TABLE/VIEW models.<model> AS SELECT; read raw.<source>."""
         return await self._call("transform", {"sql": sql})
 
     @tool

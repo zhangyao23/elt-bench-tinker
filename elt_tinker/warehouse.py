@@ -9,7 +9,7 @@ import pandas as pd
 import sqlglot
 from sqlglot import exp
 
-from elt_tinker.errors import InfrastructureError
+from elt_tinker.errors import InfrastructureError, SQLPolicyError
 from elt_tinker.task import identifier
 
 # No user-defined functions, table functions, external I/O, stored procedures or DML.
@@ -50,6 +50,8 @@ SAFE_FUNCTIONS = {
     "ceil",
     "floor",
     "row_number",
+    "first_value",
+    "exists",
     "rank",
     "dense_rank",
     "lag",
@@ -67,6 +69,7 @@ SAFE_FUNCTIONS = {
     "greatest",
     "least",
     "to_date",
+    "ts_or_ds_to_date",
     "str_to_date",
     "time_to_str",
     "regexp_replace",
@@ -92,59 +95,63 @@ def prepare_sql(
     transform: bool,
 ) -> str:
     if len(sql) > 50000:
-        raise ValueError("SQL exceeds length limit")
+        raise SQLPolicyError("SQL exceeds length limit")
     statements = sqlglot.parse(sql, read=dialect)
     if len(statements) != 1 or statements[0] is None:
-        raise ValueError("Exactly one SQL statement is required")
+        raise SQLPolicyError("Exactly one SQL statement is required")
     tree = statements[0]
     target = None
     if transform:
         if not isinstance(tree, exp.Create) or tree.args.get("kind") not in {"TABLE", "VIEW"}:
-            raise ValueError("Transformation must CREATE [OR REPLACE] TABLE/VIEW AS SELECT")
+            raise SQLPolicyError("Transformation must CREATE [OR REPLACE] TABLE/VIEW AS SELECT")
         target = tree.this
-        if not isinstance(target, exp.Table) or target.catalog or target.db:
-            raise ValueError("Create an unqualified output table")
+        if (
+            not isinstance(target, exp.Table)
+            or target.catalog
+            or target.db.lower() not in {"", "models"}
+        ):
+            raise SQLPolicyError("Create a requested output table, optionally qualified by models")
         name = identifier(target.name)
         if name not in models and not name.startswith("tmp_"):
-            raise ValueError("Only requested models or tmp_ intermediate tables may be written")
+            raise SQLPolicyError("Only requested models or tmp_ intermediate tables may be written")
         if not isinstance(tree.expression, exp.Query) or tree.args.get("properties"):
-            raise ValueError("Only plain CREATE AS SELECT is supported")
+            raise SQLPolicyError("Only plain CREATE AS SELECT is supported")
         target.set("db", exp.to_identifier(model_schema))
     elif not isinstance(tree, exp.Query):
-        raise ValueError("Inspection accepts SELECT queries only")
+        raise SQLPolicyError("Inspection accepts SELECT queries only")
     projection = tree.expression if transform else tree
     selected = [name.lower() for name in projection.named_selects if name and name != "*"]
     if len(set(selected)) != len(selected):
-        raise ValueError("Duplicate output column aliases")
+        raise SQLPolicyError("Duplicate output column aliases")
     ctes = {cte.alias.lower() for cte in tree.find_all(exp.CTE)}
     for node in tree.walk():
         if isinstance(node, (exp.Command, exp.Into, exp.Insert, exp.Delete, exp.Update, exp.Dot)):
-            raise ValueError("Statement has forbidden side effects")
+            raise SQLPolicyError("Statement has forbidden side effects")
         if isinstance(node, exp.Func):
             function_name = (
                 node.name.lower() if isinstance(node, exp.Anonymous) else node.sql_name().lower()
             )
             if function_name in FORBIDDEN_FUNCTIONS or function_name not in SAFE_FUNCTIONS:
-                raise ValueError(f"Function not allowed by this environment: {function_name}")
+                raise SQLPolicyError(f"Function not allowed by this environment: {function_name}")
             if isinstance(node, exp.Anonymous) and function_name not in ANONYMOUS_FUNCTIONS:
-                raise ValueError(f"Unapproved function: {function_name}")
+                raise SQLPolicyError(f"Unapproved function: {function_name}")
         if isinstance(node, exp.Table) and node is not target:
             if not isinstance(node.this, exp.Identifier) or node.catalog:
-                raise ValueError("External/table function or cross-database access is forbidden")
+                raise SQLPolicyError("External/table function or cross-database access is forbidden")
             name = identifier(node.name)
             schema = node.db.lower()
             if not schema and name in ctes:
                 continue
             if schema not in {"", "raw", "models"}:
-                raise ValueError("Only logical raw/models schemas are accessible")
+                raise SQLPolicyError("Only logical raw/models schemas are accessible")
             if schema == "raw" or (not schema and name in sources):
                 if name not in sources:
-                    raise ValueError(f"Unknown raw source {name}; declared sources: {', '.join(sorted(sources))}")
+                    raise SQLPolicyError(f"Unknown raw source {name}; declared sources: {', '.join(sorted(sources))}")
                 node.set("db", exp.to_identifier(raw_schema))
             elif name in models or name.startswith("tmp_"):
                 node.set("db", exp.to_identifier(model_schema))
             else:
-                raise ValueError(
+                raise SQLPolicyError(
                     f"Unknown relation {name}; sources: {', '.join(sorted(sources))}; "
                     f"outputs: {', '.join(sorted(models))}"
                 )
@@ -224,7 +231,11 @@ class DuckDBWarehouse:
             columns = [str(entry[0]).lower() for entry in result.description]
             if len(set(columns)) != len(columns):
                 raise ValueError("Duplicate output column names")
-            return result.fetchdf()
+            frame = result.fetchdf()
+            frame.attrs["column_types"] = {
+                str(entry[0]): str(entry[1]) for entry in result.description
+            }
+            return frame
         finally:
             timer.cancel()
 
@@ -306,9 +317,15 @@ class SnowflakeWarehouse:
         with self.agent_connection.cursor() as cursor:
             cursor.execute(sql)
             if query:
-                return pd.DataFrame(
+                from snowflake.connector.constants import FIELD_TYPES
+
+                frame = pd.DataFrame(
                     cursor.fetchall(), columns=[d[0].lower() for d in cursor.description]
                 )
+                frame.attrs["column_types"] = {
+                    d[0].lower(): FIELD_TYPES[d[1]].name for d in cursor.description
+                }
+                return frame
 
     def load(self, table: str, frame: pd.DataFrame):
         from snowflake.connector.pandas_tools import write_pandas
