@@ -46,6 +46,10 @@ def arguments():
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--renderer", help="Default: cookbook's model-specific recommendation")
     parser.add_argument(
+        "--field-feedback", action="store_true",
+        help="Opt-in public output-column coverage feedback; terminal reward is unchanged",
+    )
+    parser.add_argument(
         "--max-cost-usd",
         type=float,
         required=True,
@@ -131,6 +135,7 @@ async def run(args):
         "max_turns": args.max_turns,
         "context_tokens": args.context_tokens,
         "generation_tokens": args.generation_tokens,
+        "field_feedback": args.field_feedback,
         "status": "started",
         "batches": [],
         "packages": {
@@ -189,6 +194,7 @@ async def run(args):
                 args.max_turns,
                 args.context_tokens,
                 args.generation_tokens,
+                field_feedback=args.field_feedback,
             )
             policy = TinkerTokenCompleter(
                 sampling_client,

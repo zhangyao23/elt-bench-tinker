@@ -48,6 +48,8 @@ class Episode:
         output: Path,
         operator_config: dict | None = None,
         max_calls: int = 48,
+        *,
+        field_feedback: bool = False,
     ):
         self.task, self.destination, self.output = task, destination, Path(output)
         self.operator_config = operator_config or {}
@@ -59,6 +61,7 @@ class Episode:
         self.trace: list[dict] = []
         self.timings: list[dict] = []
         self.max_calls = max_calls
+        self.field_feedback = field_feedback
         self.done = self.submitted = False
         self.invalid_reason: str | None = None
         self.grade: dict | None = None
@@ -117,6 +120,44 @@ class Episode:
             "provenance": self.task.spec.get("provenance", {}),
         }
 
+    def _output_schema_feedback(self, sql: str) -> dict | None:
+        target = sqlglot.parse_one(sql, read=self.warehouse.dialect).this
+        model = next(
+            (m for m in self.task.spec["models"] if m["name"].lower() == target.name.lower()),
+            None,
+        )
+        if model is None:
+            return None
+        if not model.get("columns"):
+            return {"available": False, "reason": "No public output-column specification"}
+        started = time.monotonic()
+        try:
+            query = exp.select("*").from_(target.copy()).limit(0).sql(dialect=self.warehouse.dialect)
+            frame = model_sql(self.warehouse, query, query=True)
+            required = [column["name"] for column in model["columns"]]
+            actual = list(frame.columns)
+            required_names = {name.lower() for name in required}
+            actual_names = {name.lower() for name in actual}
+            missing = sorted(required_names - actual_names)
+            return {
+                "available": True,
+                "model": model["name"],
+                "required_columns": required,
+                "actual_columns": actual,
+                "column_types": frame.attrs.get("column_types", {}),
+                "missing_columns": missing,
+                "extra_columns": sorted(actual_names - required_names),
+                "coverage_complete": not missing,
+                "values_verified": False,
+            }
+        except ValueError as error:
+            # SQL already executed and was recorded; a failed inspection must not undo it.
+            return {"available": False, "error": safe_error(error)}
+        finally:
+            self.timings.append(
+                {"phase": "field_feedback", "table": model["name"], "seconds": time.monotonic() - started}
+            )
+
     def _dispatch(self, action: str, arguments: dict):
         if action == "inspect_task":
             return self.task.describe()
@@ -151,9 +192,15 @@ class Episode:
                 "rows": json.loads(frame.map(feedback_value).to_json(orient="records")),
             }
         if action == "transform":
-            model_sql(self.warehouse, self.sql_for(arguments["sql"], transform=True))
+            sql = self.sql_for(arguments["sql"], transform=True)
+            model_sql(self.warehouse, sql)
             self.sql.append(arguments["sql"])
-            return {"executed": True, "pipeline_statements": len(self.sql)}
+            feedback = {"executed": True, "pipeline_statements": len(self.sql)}
+            if self.field_feedback:
+                schema_feedback = self._output_schema_feedback(sql)
+                if schema_feedback is not None:
+                    feedback["output_schema"] = schema_feedback
+            return feedback
         if action == "submit_pipeline":
             self.submitted = self.done = True
             write_json(self.output / "pipeline.json", self.pipeline())

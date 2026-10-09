@@ -1,0 +1,37 @@
+name: Local checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.9'
+          cache: pip
+          cache-dependency-path: requirements-local.lock
+      - name: Install locked local dependencies
+        run: python -m pip install -r requirements-local.lock build==1.6.1
+      - name: Build distributions
+        run: python -m build
+      - name: Install wheel
+        run: python -m pip install --no-deps dist/*.whl
+      - name: Lint
+        run: ruff check elt_tinker tests scripts infra
+      - name: Credential-free regression tests
+        run: python -m pytest -q -rs
+      - name: Independent pipeline replay
+        working-directory: ${{ runner.temp }}
+        run: python -m elt_tinker.local_integration --field-feedback --output "$RUNNER_TEMP/elt-local-integration"
