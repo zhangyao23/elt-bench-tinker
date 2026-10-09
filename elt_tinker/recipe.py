@@ -50,6 +50,10 @@ def arguments():
         help="Opt-in public output-column coverage feedback; terminal reward is unchanged",
     )
     parser.add_argument(
+        "--compact-feedback", action="store_true",
+        help="Six-row previews, accurate model-turn warnings and short submission reserve",
+    )
+    parser.add_argument(
         "--max-cost-usd",
         type=float,
         required=True,
@@ -136,6 +140,8 @@ async def run(args):
         "context_tokens": args.context_tokens,
         "generation_tokens": args.generation_tokens,
         "field_feedback": args.field_feedback,
+        "compact_feedback": args.compact_feedback,
+        "generation_reserve_tokens": min(128, args.generation_tokens) if args.compact_feedback else args.generation_tokens,
         "status": "started",
         "batches": [],
         "packages": {
@@ -195,6 +201,7 @@ async def run(args):
                 args.context_tokens,
                 args.generation_tokens,
                 field_feedback=args.field_feedback,
+                compact_feedback=args.compact_feedback,
             )
             policy = TinkerTokenCompleter(
                 sampling_client,

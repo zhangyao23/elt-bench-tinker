@@ -13,6 +13,7 @@ import sqlglot
 from sqlglot import exp
 
 from elt_tinker.errors import InfrastructureError, SQLPolicyError
+from elt_tinker.feedback import public_condition_warnings
 from elt_tinker.sources import SourceReader
 from elt_tinker.task import Task, fingerprint, safe_child, write_json
 from elt_tinker.upstream.eva_stage2 import check_corretness, sort_by_keys
@@ -121,7 +122,8 @@ class Episode:
             "provenance": self.task.spec.get("provenance", {}),
         }
 
-    def _output_schema_feedback(self, target: exp.Table) -> dict | None:
+    def _output_schema_feedback(self, statement: exp.Create) -> dict | None:
+        target = statement.this
         model = next(
             (m for m in self.task.spec["models"] if m["name"].lower() == target.name.lower()),
             None,
@@ -149,6 +151,7 @@ class Episode:
                 "extra_columns": sorted(actual_names - required_names),
                 "coverage_complete": not missing,
                 "values_verified": False,
+                "condition_review": public_condition_warnings(model, statement.expression),
             }
         except ValueError as error:
             # SQL already executed and was recorded; a failed inspection must not undo it.
@@ -193,14 +196,15 @@ class Episode:
             }
         if action == "transform":
             sql = self.sql_for(arguments["sql"], transform=True)
-            target = sqlglot.parse_one(sql, read=self.warehouse.dialect).this
+            statement = sqlglot.parse_one(sql, read=self.warehouse.dialect)
+            target = statement.this
             model_sql(self.warehouse, sql)
             self.sql.append(arguments["sql"])
             if target.name.lower() in {model["name"].lower() for model in self.task.spec["models"]}:
                 self.created_models.add(target.name.lower())
             feedback = {"executed": True, "pipeline_statements": len(self.sql)}
             if self.field_feedback:
-                schema_feedback = self._output_schema_feedback(target)
+                schema_feedback = self._output_schema_feedback(statement)
                 if schema_feedback is not None:
                     feedback["output_schema"] = schema_feedback
             return feedback

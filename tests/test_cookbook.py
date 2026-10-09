@@ -36,11 +36,15 @@ def tool_action(renderer, name, arguments):
     return renderer.tokenizer.encode(text, add_special_tokens=False)
 
 
-def test_native_token_environment_feedback_and_training_masks(tmp_path, renderer):
+@pytest.mark.parametrize("compact_feedback", [False, True])
+def test_native_token_environment_feedback_and_training_masks(tmp_path, renderer, compact_feedback):
     async def exercise():
         task = local_task(tmp_path / "task")
         episode = Episode(task, "duckdb", tmp_path / "run")
-        environment = build_elt_env(episode, renderer, context_tokens=32768, generation_tokens=2048)
+        environment = build_elt_env(
+            episode, renderer, context_tokens=32768, generation_tokens=2048,
+            compact_feedback=compact_feedback,
+        )
         observation, _ = await environment.initial_observation()
         actions = [
             ("inspect_task", {}),
@@ -204,5 +208,63 @@ def test_cancelled_sync_work_finishes_before_cleanup():
         with pytest.raises(asyncio.CancelledError):
             await work
         assert finished.is_set()
+
+    asyncio.run(exercise())
+
+
+def test_compact_query_keeps_submission_space_and_actual_turn_budget(tmp_path, renderer):
+    async def exercise(compact):
+        label = "compact" if compact else "full"
+        episode = Episode(local_task(tmp_path / label / "task"), "duckdb", tmp_path / label / "run")
+        try:
+            from elt_tinker.local_fixture import load_all
+
+            load_all(episode)
+            assert episode.act("transform", {"sql": GOOD_SQL})["ok"]
+            env = build_elt_env(
+                episode, renderer, max_turns=3, context_tokens=3000,
+                generation_tokens=512, compact_feedback=compact,
+            )
+            await env.initial_observation()
+            value = "contextmarker" * 60
+            sql = f"SELECT c.id, '{value}' AS preview FROM raw.customers c CROSS JOIN raw.orders o"
+            result = await env.step(tool_action(renderer, "query", {"sql": sql}))
+            assert len(episode.trace[-1]["feedback"]["result"]["rows"]) == 12
+            if not compact:
+                assert result.episode_done and result.metrics["context_overflow"] == 1
+                assert not episode.submitted
+                return
+            assert not result.episode_done and result.next_observation.length + 128 <= 3000
+            message = env.message_env.history[-1]
+            feedback = json.loads(message["content"])
+            assert len(feedback["result"]["rows"]) == 6
+            assert feedback["state"]["model_turns_remaining"] == 2
+            assert feedback["state"]["tool_calls_remaining"] > 2
+            assert "explicit" in feedback["next_action_hint"]
+            submitted = await env.step(tool_action(renderer, "submit_pipeline", {}))
+            assert submitted.episode_done and submitted.reward == 1 and episode.submitted
+        finally:
+            episode.close()
+
+    asyncio.run(exercise(False))
+    asyncio.run(exercise(True))
+
+
+def test_actual_completer_clips_generation_to_context_without_service():
+    from types import SimpleNamespace
+
+    from tinker_cookbook.completers import TinkerTokenCompleter
+
+    seen = []
+
+    class RecordingClient:
+        async def sample_async(self, *, prompt, num_samples, sampling_params):
+            seen.append(sampling_params.max_tokens)
+            return SimpleNamespace(sequences=[SimpleNamespace(tokens=[1], logprobs=[-0.5], stop_reason="stop")])
+
+    async def exercise():
+        policy = TinkerTokenCompleter(RecordingClient(), max_tokens=512, context_window=3000)
+        result = await policy(tinker.ModelInput.from_ints([1] * 2800), stop=[2])
+        assert result.tokens == [1] and seen == [200]
 
     asyncio.run(exercise())
