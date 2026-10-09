@@ -112,6 +112,8 @@ SDK 0.32的Datum/TensorData使用dataclass；本项目显式保存数值数据�
 - docs/verification.md：回归、安全边界、性能与待验证限制。
 - docs/review_v0_2.md：新版本Standards/Spec两轴审查及覆盖问题修复。
 - docs/improvement_plan.md：提交前接口修复、检查门禁和字段反馈对照计划；不计作已完成实验。
+- docs/change_and_experiment_log.md：每项修改、对应问题和实际结果。
+- docs/ablation_protocol.md、docs/ablation_results_20261010.md：压缩与年份提示的独立开关三组真实试运行；样本有限，未证明优化收益。
 - TASK_STATE.md：仅本地保存的工作状态与恢复记录，不上传 GitHub；仓库验收说明见 docs/verification.md。
 - THIRD_PARTY.md：固定版本来源、许可证与贡献边界。
 
