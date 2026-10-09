@@ -92,6 +92,30 @@ def test_duplicate_projection_rejected():
         )
 
 
+def test_budget_reservations_are_cumulative_and_finite(tmp_path):
+    pytest.importorskip("tinker_cookbook")
+    from elt_tinker.recipe import reserve_budget
+
+    ledger = tmp_path / "budget.json"
+    assert reserve_budget(ledger, 10, 7, tmp_path / "rollout")["remaining_usd"] == 3
+    with pytest.raises(ValueError, match="cumulative"):
+        reserve_budget(ledger, 10, 4, tmp_path / "train")
+    with pytest.raises(ValueError, match="implicitly"):
+        reserve_budget(ledger, 20, 1, tmp_path / "retry")
+    with pytest.raises(ValueError, match="finite"):
+        reserve_budget(ledger, float("nan"), 1, tmp_path / "invalid")
+    assert reserve_budget(ledger, 10, 3, tmp_path / "train")["remaining_usd"] == 0
+
+
+def test_resume_cannot_reuse_a_budget_reservation(tmp_path):
+    pytest.importorskip("tinker_cookbook")
+    from elt_tinker.recipe import claim_resume
+
+    claim_resume(tmp_path, tmp_path / "first")
+    with pytest.raises(FileExistsError):
+        claim_resume(tmp_path, tmp_path / "second")
+
+
 def test_seed_credentials_are_bound_to_local_test_services(monkeypatch):
     import os
 

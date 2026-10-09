@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from tinker_cookbook.renderers.base import Renderer
+from tinker_cookbook.rl.rollout_strategy import RolloutResult, RolloutStrategy
+from tinker_cookbook.rl.rollouts import do_single_rollout
 from tinker_cookbook.rl.types import EnvGroupBuilder
 from tinker_cookbook.tool_use import build_agent_tool_env
 from tinker_cookbook.tool_use.tools import simple_tool_result, tool
@@ -12,6 +14,30 @@ from tinker_cookbook.tool_use.tools import simple_tool_result, tool
 from elt_tinker.environment import Episode, safe_error
 from elt_tinker.errors import InfrastructureError
 from elt_tinker.task import Task, write_json
+
+
+async def complete_sync(function, *arguments):
+    """Finish an already-issued synchronous DB operation before cancellation cleans it up."""
+    work = asyncio.create_task(asyncio.to_thread(function, *arguments))
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        await asyncio.gather(work, return_exceptions=True)
+        raise
+
+
+class CompleteGroup(RolloutStrategy):
+    """No retries: drain all issued rollouts before propagating a group failure."""
+
+    async def execute(self, env_group_builder, policy):
+        envs = await env_group_builder.make_envs()
+        results = await asyncio.gather(
+            *(do_single_rollout(policy, env) for env in envs), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return RolloutResult(trajectories=results, envs=envs, errors=[])
 
 
 class ELTTools:
@@ -23,7 +49,7 @@ class ELTTools:
         async with self.lock:
             if self.episode.done:
                 return simple_tool_result("Episode ended", should_stop=True)
-            feedback = await asyncio.to_thread(self.episode.act, name, arguments)
+            feedback = await complete_sync(self.episode.act, name, arguments)
             return simple_tool_result(
                 json.dumps(feedback, default=str), should_stop=self.episode.done
             )
@@ -90,7 +116,7 @@ def build_elt_env(
     ]
 
     async def reward_fn(history):
-        grade = episode.grade or await asyncio.to_thread(episode.evaluate)
+        grade = episode.grade or await complete_sync(episode.evaluate)
         write_json(episode.output / "messages.json", history)
         if not grade["valid"]:
             # Let sibling trajectories finish before group validation/cleanup. This
@@ -150,14 +176,7 @@ class ELTGroupBuilder(EnvGroupBuilder):
     async def make_envs(self):
         environments = []
         for index in range(self.group_size):
-            episode = await asyncio.to_thread(
-                Episode,
-                self.task,
-                self.destination,
-                self.output / f"episode_{index}",
-                self.operator_config,
-            )
-            self.episodes.append(episode)
+            episode = await complete_sync(self._create_episode, index)
             environments.append(
                 build_elt_env(
                     episode,
@@ -169,17 +188,30 @@ class ELTGroupBuilder(EnvGroupBuilder):
             )
         return environments
 
+    def _create_episode(self, index):
+        episode = Episode(
+            self.task, self.destination, self.output / f"episode_{index}", self.operator_config
+        )
+        # Track it in the same sync operation, even if the awaiting caller is cancelled.
+        self.episodes.append(episode)
+        return episode
+
     async def cleanup(self):
         failures = []
         for episode in self.episodes:
             try:
-                await asyncio.to_thread(episode.close)
+                await complete_sync(episode.close)
             except Exception as error:
                 failures.append({"episode": str(episode.output), "error": safe_error(error)})
         if failures:
             write_json(self.output / "cleanup_errors.json", failures)
+            raise InfrastructureError("Warehouse cleanup failed; see cleanup_errors.json")
 
     async def compute_group_rewards(self, trajectory_group, env_group):
+        for episode, environment in zip(self.episodes, env_group, strict=True):
+            write_json(episode.output / "messages.json", environment.message_env.history)
+            if episode.grade is None:
+                episode.grade = await complete_sync(episode.evaluate)
         if any(episode.invalid_reason for episode in self.episodes):
             raise InfrastructureError("An episode was invalid; excluding the entire group")
         return [(0.0, {}) for _ in trajectory_group]

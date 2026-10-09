@@ -64,8 +64,12 @@ class Episode:
             "and repair SQL errors. Call submit_pipeline to finish; a final message alone does "
             "not submit. Scoring verifies loaded raw content, replays on an empty warehouse, "
             "then queries actual tables. Hidden reference data is unavailable. "
-            f"SQL dialect: {self.warehouse.dialect}. Task:\n"
-            + json.dumps(self.task.describe(), ensure_ascii=False)
+            "Keep explanations brief and prioritize tool execution. Query only to resolve a "
+            "specific uncertainty; do not repeat successful inspections. Use exact declared "
+            "source names. Work on one output model per response, and submit your best pipeline "
+            "before the limits even if some transformations are uncertain. "
+            f"SQL dialect: {self.warehouse.dialect}. Task ID: {self.task.spec['id']}. "
+            "Call inspect_task once to read its complete specification."
         )
 
     def sql_for(self, sql: str, *, transform: bool) -> str:
@@ -187,10 +191,13 @@ class Episode:
             actual = model_sql(
                 self.warehouse, f"SELECT * FROM {self.warehouse.raw_schema}.{table}", query=True
             )
+            actual_digest = fingerprint(actual)
             result[table] = {
                 "rows": len(actual),
                 "expected_rows": len(source),
-                "match": reader.fingerprints[table] == fingerprint(actual),
+                "match": reader.fingerprints[table] == actual_digest,
+                "actual_fingerprint": actual_digest,
+                "source_fingerprint": reader.fingerprints[table],
             }
         if not all(entry["match"] for entry in result.values()):
             raise ValueError("Raw warehouse content mismatch")
@@ -216,7 +223,12 @@ class Episode:
         actual = model_sql(self.warehouse, sql, query=True)
         if len(set(c.lower() for c in actual.columns)) != len(actual.columns):
             raise ValueError("Duplicate output column names")
-        return csv_frame(actual)
+        frame = csv_frame(actual)
+        evidence = self.output / "warehouse_results"
+        evidence.mkdir(parents=True, exist_ok=True)
+        (evidence / f"{table}.sql").write_text(sql, encoding="utf-8")
+        frame.to_csv(evidence / f"{table}.csv", index=False)
+        return frame
 
     def _grade_models(self, report):
         matched, total = 0, 0
@@ -233,6 +245,9 @@ class Episode:
                 result["row_count_match"] = len(gold) == len(actual)
                 result["extra_columns"] = sorted(
                     {c.lower() for c in actual.columns} - {c.lower() for c in gold.columns}
+                )
+                result["missing_columns"] = sorted(
+                    {c.lower() for c in gold.columns} - {c.lower() for c in actual.columns}
                 )
                 result["match"] &= result["row_count_match"]
                 if result["row_count_match"]:

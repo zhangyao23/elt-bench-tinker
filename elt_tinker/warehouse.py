@@ -109,12 +109,13 @@ def prepare_sql(
             raise ValueError("Only requested models or tmp_ intermediate tables may be written")
         if not isinstance(tree.expression, exp.Query) or tree.args.get("properties"):
             raise ValueError("Only plain CREATE AS SELECT is supported")
-        selected = [name.lower() for name in tree.expression.named_selects if name != "*"]
-        if len(set(selected)) != len(selected):
-            raise ValueError("Duplicate output column aliases")
         target.set("db", exp.to_identifier(model_schema))
     elif not isinstance(tree, exp.Query):
         raise ValueError("Inspection accepts SELECT queries only")
+    projection = tree.expression if transform else tree
+    selected = [name.lower() for name in projection.named_selects if name and name != "*"]
+    if len(set(selected)) != len(selected):
+        raise ValueError("Duplicate output column aliases")
     ctes = {cte.alias.lower() for cte in tree.find_all(exp.CTE)}
     for node in tree.walk():
         if isinstance(node, (exp.Command, exp.Into, exp.Insert, exp.Delete, exp.Update, exp.Dot)):
@@ -124,7 +125,7 @@ def prepare_sql(
                 node.name.lower() if isinstance(node, exp.Anonymous) else node.sql_name().lower()
             )
             if function_name in FORBIDDEN_FUNCTIONS or function_name not in SAFE_FUNCTIONS:
-                raise ValueError("External I/O or stateful functions are forbidden")
+                raise ValueError(f"Function not allowed by this environment: {function_name}")
             if isinstance(node, exp.Anonymous) and function_name not in ANONYMOUS_FUNCTIONS:
                 raise ValueError(f"Unapproved function: {function_name}")
         if isinstance(node, exp.Table) and node is not target:
@@ -138,12 +139,15 @@ def prepare_sql(
                 raise ValueError("Only logical raw/models schemas are accessible")
             if schema == "raw" or (not schema and name in sources):
                 if name not in sources:
-                    raise ValueError("Unknown raw source")
+                    raise ValueError(f"Unknown raw source {name}; declared sources: {', '.join(sorted(sources))}")
                 node.set("db", exp.to_identifier(raw_schema))
             elif name in models or name.startswith("tmp_"):
                 node.set("db", exp.to_identifier(model_schema))
             else:
-                raise ValueError("Unknown relation")
+                raise ValueError(
+                    f"Unknown relation {name}; sources: {', '.join(sorted(sources))}; "
+                    f"outputs: {', '.join(sorted(models))}"
+                )
     if not transform:
         # Wrapper limits returned rows even if the model requests a larger LIMIT.
         tree = sqlglot.parse_one(
@@ -160,6 +164,8 @@ def model_sql(warehouse, sql: str, *, query: bool = False):
         if hasattr(warehouse, "run_agent"):
             return warehouse.run_agent(sql, query=False)
         return warehouse.execute(sql)
+    except ValueError:
+        raise
     except duckdb.Error as error:
         if isinstance(
             error,
@@ -282,7 +288,7 @@ class SnowflakeWarehouse:
 
     def reset(self):
         for schema in (self.raw_schema, self.model_schema):
-            self.execute(f"CREATE OR REPLACE SCHEMA {self.database}.{schema}")
+            self.execute(f"CREATE OR REPLACE SCHEMA {self.database}.{schema} WITH MANAGED ACCESS")
             self.execute(
                 f"GRANT USAGE ON SCHEMA {self.database}.{schema} TO ROLE {self.agent_role}"
             )

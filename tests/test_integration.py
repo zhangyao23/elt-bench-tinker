@@ -49,6 +49,20 @@ def test_wrong_pipeline_has_execution_derived_partial_reward(tmp_path):
         episode.close()
 
 
+def test_duplicate_query_columns_allow_model_to_repair(tmp_path):
+    episode = Episode(local_task(tmp_path / "task"), "duckdb", tmp_path / "run")
+    try:
+        load_all(episode)
+        result = episode.act("query", {"sql": "SELECT 1 AS id, 2 AS ID"})
+        assert not result["ok"] and result["error_kind"] == "action"
+        assert not episode.done and episode.invalid_reason is None
+        assert episode.act("query", {"sql": "SELECT 1 AS id, 2 AS other_id"})["ok"]
+        assert episode.act("transform", {"sql": GOOD_SQL})["ok"]
+        assert episode.act("submit_pipeline", {})["result"]["reward"] == 1
+    finally:
+        episode.close()
+
+
 def test_missing_load_and_non_submission_fail_closed(tmp_path):
     episode = Episode(local_task(tmp_path / "task"), "duckdb", tmp_path / "run")
     try:

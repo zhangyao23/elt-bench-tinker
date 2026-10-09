@@ -7,8 +7,8 @@
 | 验收 | 状态 |
 |---|---|
 | 无凭据 integration | CSV/DuckDB/错误修复/独立进程重放已通过；见 docs/verification.md |
-| 官方带凭据 rollout | 未运行；Snowflake 实际连接与权限仍待核验 |
-| 真实 Tinker RL optimization | 未运行；recipe 已实现，尚无实际优化或 checkpoint 证据 |
+| 官方带凭据 rollout | Qwen3.5-9B在shipping/Snowflake实际提交pipeline，reward0.8125（13/16列），独立进程重放一致；任务尚未完全解对 |
+| 真实 Tinker RL optimization | 已完成一次非零优势真实更新，保存服务应答与checkpoint；详见docs/verification.md |
 
 官方 shipping 快照的人工 SQL 本地诊断 reward=1、2 模型/16 列匹配 v5 GT。这是版本/数据诊断，使用 file snapshots 与人工 SQL，不是模型驱动的带凭据官方 rollout。原生 cookbook token 环境也已在本地测试；动作是脚本提供，没有使用模型采样或本地训练冒充 Tinker 优化。
 
@@ -76,22 +76,24 @@ Remove-Item Env:SETUPTOOLS_SCM_PRETEND_VERSION
 
 requirements-training.lock 记录已验证的 SDK/客户端依赖；torch 为客户端数据处理，不做本地模型训练。Qwen3.5-4B 公开 tokenizer 会按 cookbook 路径下载；首次测试需要联网。
 
-真实官方 rollout 默认建议 Qwen/Qwen3.5-4B，仍须以账号 capabilities 为准；不自动换模型。先由操作员配置 `TINKER_API_KEY`、`SNOWFLAKE_ACCOUNT/USER/DATABASE/WAREHOUSE/ROLE/AGENT_ROLE` 及 password 或 private_key_file。密钥只在私密环境/文件中设置，不粘贴聊天或提交 Git。参考 infra/snowflake_setup.sql 准备专用测试 DB 与两种角色，禁止 ELT_AGENT 继承 ELT_LOADER 的权限；环境关闭 secondary roles。
+真实验收使用Qwen/Qwen3.5-9B；4B三条尝试均未提交，失败记录保留。型号由操作员明确选择，recipe不自动fallback，以账号capabilities和预算为准。先由操作员配置 `TINKER_API_KEY`、`SNOWFLAKE_ACCOUNT/USER/DATABASE/WAREHOUSE/ROLE/AGENT_ROLE` 及 password 或 private_key_file。密钥只在私密环境/文件中设置，不粘贴聊天或提交 Git。参考 infra/snowflake_setup.sql 准备专用测试 DB 与两种角色，禁止 ELT_AGENT 继承 ELT_LOADER 的权限；环境关闭 secondary roles。
 
-资源和预算明确后才运行下列命令，示例数字不是已获授权费用：
+资源和预算明确后才运行下列命令，示例数字不是消费授权。两次使用同一个预算账本，max-cost-usd为合计预留上限：
 
 ```powershell
-.venv/Scripts/python.exe -m elt_tinker.recipe --mode rollout --model Qwen/Qwen3.5-4B --public data/official/shipping/public --hidden data/official/shipping/hidden --destination snowflake --operator-config infra/source_config.example.json --output runs/official_rollout_01 --max-cost-usd 1
-.venv/Scripts/python.exe -m elt_tinker.recipe --mode train --model Qwen/Qwen3.5-4B --public data/official/shipping/public --hidden data/official/shipping/hidden --destination snowflake --operator-config infra/source_config.example.json --output runs/tinker_step_01 --steps 1 --group-size 4 --max-batches 3 --max-turns 12 --context-tokens 16384 --max-cost-usd 5
+.venv/Scripts/python.exe -m elt_tinker.recipe --mode rollout --model Qwen/Qwen3.5-9B --public data/official/shipping/public --hidden data/official/shipping/hidden --destination snowflake --operator-config infra/source_config.example.json --output runs/official_rollout_01 --context-tokens 24576 --budget-ledger runs/acceptance_budget.json --max-cost-usd 10 --renderer qwen3_5_disable_thinking --generation-tokens 4096
+.venv/Scripts/python.exe -m elt_tinker.recipe --mode train --model Qwen/Qwen3.5-9B --public data/official/shipping/public --hidden data/official/shipping/hidden --destination snowflake --operator-config infra/source_config.example.json --output runs/tinker_step_01 --steps 1 --group-size 4 --max-batches 1 --max-turns 24 --context-tokens 24576 --budget-ledger runs/acceptance_budget.json --max-cost-usd 10 --renderer qwen3_5_disable_thinking --generation-tokens 4096
 ```
 
-recipe 获取公开 rate card，对全部允许调用按最坏上下文/生成/训练 token 预算估计；超过 max-cost-usd 则在创建 Tinker ServiceClient 前退出。这是保守 token 预算，不是服务端账单硬限额，warehouse/storage/tax 单独核算。服务故障使整组排除；恒定奖励跳过更新，有限批次耗尽后报告失败。只在真实 forward_backward 和 optim_step futures 返回后写 optimization_acknowledgement.json，随后刷新 sampler 并保存 checkpoint。
+recipe 获取公开 rate card，按全部允许调用的最坏上下文/生成/训练token估计，并预留24小时checkpoint存储上界。在共享账本中原子预留；合计超过max-cost-usd时在创建ServiceClient前退出。失败预留不自动返还，不可通过更换账本规避已批准总额。这是保守预算，不是服务端实时账单硬限额；warehouse/tax单独核算。服务故障使整组排除，先等待已发出的轨迹结束再清理；恒定奖励跳过更新，有限批次耗尽后报告未完成。只在真实forward_backward和optim_step futures返回后写应答，刷新sampler并保存24小时TTL checkpoint。有效rollout和完整解题分别记录。
 
 独立 replay：
 
 ```powershell
 .venv/Scripts/python.exe -m elt_tinker.replay --public data/official/shipping/public --hidden data/official/shipping/hidden --pipeline runs/official_rollout_01/batch_0/episode_0/pipeline.json --operator-config infra/source_config.example.json --output runs/replay_01
 ```
+
+SDK 0.32的Datum/TensorData使用dataclass；本项目显式保存数值数据、dtype和shape。若在优化器调用前失败，可使用 `--resume-from runs/tinker_step_01 --output runs/tinker_step_recovery_01` 与相同型号/任务/预算账本复用已保存的整组真实轨迹。无需重新采样；保留原采样logprobs，用importance_sampling校正新初始learner与采样policy的差异。独占恢复receipt禁止重复使用同一预算预留；已有optimizer应答时拒绝恢复。不要把此机制用于重复梯度更新或绕过费用上限。
 
 ## 设计与证据
 

@@ -8,7 +8,7 @@
 
 本地测试覆盖真实 CSV/HTTP/Parquet、DuckDB load、SQL 错误修复、raw 内容核验、独立进程 replay、官方 comparator 的 extra-column/NULL/tolerance/row-order/duplicate 行为。2026-10-08 已进一步通过5个官方真实源读取、全链路DuckDB手工SQL诊断和独立进程replay；2模型/16要求列全部匹配v5 GT，reward=1。证据 runs/native_source_services.json、native_shipping_diagnostic/execution/grade.json、native_shipping_independent_replay/grade.json。它仍不是模型驱动的官方credentialed rollout。真实 Qwen3.5 tokenizer 和 cookbook renderer 测试使用 XML-style scripted tool actions，验证 token Env、action loss mask、logprobs 和 invalid group 排除；它没有采样模型或训练权重。
 
-既有回归结果为39项通过；最新本地运行记录保存在Git忽略的runs目录，不从脚本存在推定已经运行成功。wheel clean install 与独立目录测试记录在 runs/clean-*。个人恢复状态TASK_STATE.md仅本地保存。
+最终回归结果为46项通过；最新本地运行记录保存在Git忽略的runs目录，不从脚本存在推定已经运行成功。wheel clean install 与独立目录测试记录在 runs/clean-*。个人恢复状态TASK_STATE.md仅本地保存。
 
 ## Step 4：reward hacking
 
@@ -42,5 +42,19 @@ Snowflake 的实际 RBAC、stage/类型行为和失败资源清理尚待账号�
 ## 未解决资源
 
 - WSL已恢复默认Ubuntu-22.04-Recovered，Podman3.4.4运行本地源容器；5源均已验证。旧Ubuntu登记保留，避免注销误删同一磁盘。镜像按固定digest下载并核验，当前trusted本地容器未启用cgroup配额，正式扩大负载需合适资源限制。
-- Snowflake实际连接/权限、官方模型rollout与真实Tinker优化尚未通过验收。max-cost-usd 是保守 token 预估门禁，不是服务端实时账单硬上限，不含 warehouse/storage/tax；操作员应控制所有运行的累计费用。
+- 三项运行验收已有真实证据。预算账本约束全部运行的保守token与24小时checkpoint存储预留，不是服务端实时账单硬限额；warehouse/tax另计，实际账单可能延迟。
 - implementation design是待云验收后更新的草稿，尚未向教授提交或发送邮件。私人通信、凭据、运行数据和操作员状态不上传实现仓库。
+
+## 2026-10-09 真实云验收
+
+| 验收 | 结果 | 私人证据路径（Git忽略） |
+|---|---|---|
+| credential-free integration | 通过，最终46项回归/Lint/构建通过 | runs/final_real_acceptance_tests_20261009.log |
+| 官方credentialed rollout | 9B生成两模型并提交，Snowflake实际评分0.8125，13/16列；新进程重放一致 | runs/official_rollout_20261009_9b_01、runs/official_rollout_20261009_9b_replay |
+| 真实RL优化 | 原4轨迹奖励[0,0.875,0,0.9375]，非零优势；真实fwd/bwd与optim_step确认一次，checkpoint服务端核验 | runs/tinker_step_20261009_9b_01、runs/tinker_step_20261009_9b_resume_01 |
+
+实际查询SQL/结果CSV保存在replay的warehouse_results。原4B三条失败、9B基线部分错误以及SDK序列化失败均保留，不追认成满分。replay CLI对非满分pipeline返回exit1，但valid/reward一致，证明可重放，不代表任务完全正确。
+
+SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组实际轨迹和采样logprobs，创建同base/rank新初始learner进行importance_sampling，不宣称恢复了原client或重复采样。恢复receipt阻止同一预留重复更新。API确认返回9个训练logprob序列；optimizer额外metrics为空，未虚构梯度范数。服务端checkpoint大小567621237字节，24小时TTL。
+
+真实数据mask核验：39631采样action tokens全部被训练，观察tokens的advantage为零。一个真实更新证明训练链路执行成功，尚未比较更新前后准确率。型号、提示和token上限在调试中变化，结果不构成受控消融或算法性能结论。

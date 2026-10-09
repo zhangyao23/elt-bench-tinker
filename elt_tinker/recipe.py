@@ -3,19 +3,23 @@
 import argparse
 import asyncio
 import importlib.metadata
+import json
+import math
 import os
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import tinker
 from tinker_cookbook import hyperparam_utils, model_info, tokenizer_utils
-from tinker_cookbook.completers import TinkerTokenCompleter
+from tinker_cookbook.completers import TinkerTokenCompleter, TokensWithLogprobs
 from tinker_cookbook.renderers import get_renderer
 from tinker_cookbook.rl.data_processing import assemble_training_data, compute_advantages
 from tinker_cookbook.rl.rollouts import do_group_rollout
 from tinker_cookbook.rl.train import train_step
+from tinker_cookbook.rl.types import Trajectory, TrajectoryGroup, Transition
 
-from elt_tinker.cookbook_env import ELTGroupBuilder
+from elt_tinker.cookbook_env import CompleteGroup, ELTGroupBuilder
 from elt_tinker.environment import safe_error
 from elt_tinker.errors import InfrastructureError
 from elt_tinker.task import Task, read_json, write_json
@@ -45,8 +49,10 @@ def arguments():
         "--max-cost-usd",
         type=float,
         required=True,
-        help="Operator-approved token budget; conservative preflight, not a billing-service hard cap",
+        help="Approved total reservation cap across all runs sharing the budget ledger",
     )
+    parser.add_argument("--budget-ledger", type=Path, default=Path("runs/tinker_budget.json"))
+    parser.add_argument("--resume-from", type=Path, help="Reuse a saved group before any optimizer call; no resampling")
     return parser.parse_args()
 
 
@@ -61,7 +67,11 @@ async def run(args):
         raise ValueError("Centered GRPO requires at least two independent rollouts")
     if not 1 <= args.max_turns <= 32 or not 64 <= args.generation_tokens <= 4096:
         raise ValueError("Require 1..32 turns and 64..4096 generation tokens per turn")
-    if not 2048 <= args.context_tokens <= 65536 or args.max_cost_usd <= 0:
+    if (
+        not 2048 <= args.context_tokens <= 65536
+        or not math.isfinite(args.max_cost_usd)
+        or args.max_cost_usd <= 0
+    ):
         raise ValueError("Require 2048..65536 context tokens and a positive approved budget")
     task = Task.load(args.public, args.hidden)
     if task.spec.get("official") and args.destination != "snowflake":
@@ -93,22 +103,34 @@ async def run(args):
     if rates is None:
         raise ValueError("No current public rate card for selected model; refusing unbounded spend")
     worst_cost = token_budget(args, rates)
-    if worst_cost > args.max_cost_usd:
+    # One persistent checkpoint, expiring after 24h. Use a full-model-sized upper
+    # bound (24 bytes/parameter) although Tinker checkpoints store LoRA state.
+    storage_cost = (
+        int(rates["params"]) * 24 / 1_000_000_000 * 0.10 / 30 if args.mode == "train" else 0.0
+    )
+    if worst_cost + storage_cost > args.max_cost_usd:
         raise ValueError(
             f"Conservative token cost ${worst_cost:.2f} exceeds approved ${args.max_cost_usd:.2f}; reduce batches/turns/group/context"
         )
     args.output.mkdir(parents=True, exist_ok=False)
     operator = read_json(args.operator_config) if args.operator_config else {}
+    budget = reserve_budget(
+        args.budget_ledger, args.max_cost_usd, worst_cost + storage_cost, args.output
+    )
     record = {
         "mode": args.mode,
         "model": args.model,
         "destination": args.destination,
         "official": task.spec.get("official", False),
         "provenance": task.spec.get("provenance", {}),
-        "group_size": args.group_size,
+        "group_size": args.group_size if args.mode == "train" else 1,
         "requested_steps": args.steps,
         "max_batches": args.max_batches,
         "optimization_steps_completed": 0,
+        "rank": args.rank,
+        "max_turns": args.max_turns,
+        "context_tokens": args.context_tokens,
+        "generation_tokens": args.generation_tokens,
         "status": "started",
         "batches": [],
         "packages": {
@@ -119,8 +141,11 @@ async def run(args):
     record.update(
         max_cost_usd=args.max_cost_usd,
         conservative_token_cost_usd=worst_cost,
+        conservative_checkpoint_storage_usd=storage_cost,
+        budget_reservation=budget,
+        checkpoint_ttl_seconds=86400,
         rate_card=rates,
-        budget_excludes="warehouse, storage, taxes; rate-card changes require a new run",
+        budget_excludes="warehouse and taxes; rate-card changes require a new run",
     )
     write_json(args.output / "training.json", record)
     try:
@@ -139,9 +164,10 @@ async def run(args):
         if args.context_tokens > supported.max_context_length:
             raise ValueError("Requested context exceeds account model limit")
         tokenizer = tokenizer_utils.get_tokenizer(args.model)
-        renderer = get_renderer(
-            args.renderer or model_info.get_recommended_renderer_name(args.model), tokenizer
-        )
+        renderer_name = args.renderer or model_info.get_recommended_renderer_name(args.model)
+        renderer = get_renderer(renderer_name, tokenizer)
+        record["renderer"] = renderer_name
+        write_json(args.output / "training.json", record)
         if args.mode == "train":
             training_client = await service.create_lora_training_client_async(
                 base_model=args.model, rank=args.rank
@@ -170,8 +196,9 @@ async def run(args):
                 context_window=args.context_tokens,
             )
             sample_start = time.monotonic()
+            print(f"Starting {args.mode} batch {batch_index}; {builder.group_size} rollout(s)", flush=True)
             try:
-                group = await do_group_rollout(builder, policy)
+                group = await do_group_rollout(builder, policy, strategy=CompleteGroup())
             except InfrastructureError as error:
                 record["batches"].append(
                     {
@@ -194,11 +221,13 @@ async def run(args):
                 ),
             }
             record["batches"].append(batch)
+            print(f"Batch {batch_index} execution rewards: {rewards}", flush=True)
             write_json(
                 batch_output / "trajectories.json",
                 [
                     {
                         "stop_reason": trajectory.stop_reason,
+                        "final_ob": trajectory.final_ob.model_dump(mode="json"),
                         "transitions": [
                             {
                                 "observation": t.ob.model_dump(mode="json"),
@@ -215,11 +244,14 @@ async def run(args):
             )
             if args.mode == "rollout":
                 grade = builder.episodes[0].grade
-                if not grade or not grade["valid"] or not grade.get("all_models_match"):
-                    raise RuntimeError(
-                        "Official rollout executed but task was not fully solved; retain failure evidence"
-                    )
+                if not grade or not grade["valid"]:
+                    raise InfrastructureError("Official rollout had no valid execution grade")
                 record["status"] = "rollout_completed"
+                record.update(
+                    task_solved=grade.get("all_models_match", False),
+                    pipeline_submitted=grade["submitted"],
+                    reward=grade["reward"],
+                )
                 break
             advantages = compute_advantages([group])
             batch["advantages"] = advantages[0].tolist()
@@ -232,29 +264,11 @@ async def run(args):
                 raise ValueError("No sampled action tokens available for optimization")
             write_json(
                 batch_output / "training_data.json",
-                {"datums": [datum.model_dump(mode="json") for datum in data], "metadata": metadata},
+                {"datums": [serialize_datum(datum) for datum in data], "metadata": metadata},
             )
             # Cookbook masks prompts/tool observations, uses sampled logprobs and
             # pipelines real forward_backward + optim_step; returned futures are awaited.
-            metrics = {}
-            update_start = time.monotonic()
-            logprobs = await train_step(
-                data,
-                training_client,
-                learning_rate,
-                num_substeps=1,
-                loss_fn="importance_sampling",
-                metrics=metrics,
-            )
-            write_json(
-                batch_output / "optimization_acknowledgement.json",
-                {
-                    "forward_backward_and_optim_step_awaited": True,
-                    "returned_logprob_sequences": len(logprobs),
-                    "optimizer_metrics": metrics,
-                    "seconds": time.monotonic() - update_start,
-                },
-            )
+            metrics = await optimize_data(data, training_client, learning_rate, batch_output)
             record["optimization_steps_completed"] += 1
             batch.update(status="optimization_acknowledged", optimizer_metrics=metrics)
             write_json(args.output / "training.json", record)
@@ -268,8 +282,13 @@ async def run(args):
                 "Bounded rollout budget exhausted without enough nonzero-advantage updates"
             )
         if training_client is not None:
-            saved = await (await training_client.save_state_async("elt-final")).result_async()
+            saved = await (
+                await training_client.save_state_async("elt-final", ttl_seconds=86400)
+            ).result_async()
             record["checkpoint"] = saved.path
+    except asyncio.CancelledError:
+        record.update(status="cancelled", error="Operator or caller cancelled the run")
+        raise
     except Exception as error:
         record.update(status="failed", error=safe_error(error))
         raise
@@ -286,7 +305,10 @@ def token_budget(args, rates):
     turns = groups * size * args.max_turns
 
     def price(key):
-        return float(rates[key].lstrip("$"))
+        value = float(rates[key].lstrip("$"))
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Rate card prices must be finite and nonnegative")
+        return value
 
     # Worst case even if renderer breaks prefix sharing: one context-length datum per turn.
     total = turns * args.context_tokens * price("prefill")
@@ -296,10 +318,165 @@ def token_budget(args, rates):
     return total / 1_000_000
 
 
+def reserve_budget(path: Path, limit: float, cost: float, output: Path) -> dict:
+    """Reserve worst-case spend atomically; failures retain their reservation."""
+    if not all(math.isfinite(value) and value >= 0 for value in (limit, cost)) or limit == 0:
+        raise ValueError("Budget must be finite and positive")
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_suffix(path.suffix + ".lock")
+    descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        ledger = read_json(path) if path.exists() else {"limit_usd": limit, "reservations": []}
+        if ledger["limit_usd"] != limit:
+            raise ValueError("Ledger limit differs; do not change the approved cap implicitly")
+        previous = [entry["reserved_usd"] for entry in ledger["reservations"]]
+        if not all(math.isfinite(value) and value >= 0 for value in previous):
+            raise ValueError("Invalid budget ledger")
+        reserved = sum(previous)
+        if cost > limit - reserved:
+            raise ValueError(f"Insufficient cumulative budget: ${limit - reserved:.2f} remains")
+        entry = {"output": str(output.resolve()), "reserved_usd": cost}
+        ledger["reservations"].append(entry)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        write_json(temporary, ledger)
+        os.replace(temporary, path)
+        return {**entry, "ledger": str(path), "remaining_usd": limit - reserved - cost}
+    finally:
+        os.close(descriptor)
+        lock.unlink()
+
+
+def serialize_datum(datum: tinker.Datum) -> dict:
+    """SDK 0.32 uses dataclasses for Datum/TensorData, Pydantic for ModelInput."""
+    result = {
+        "model_input": datum.model_input.model_dump(mode="json"),
+        "loss_fn_inputs": {
+            key: {"data": value.data, "dtype": value.dtype, "shape": value.shape,
+                  "sparse_crow_indices": value.sparse_crow_indices,
+                  "sparse_col_indices": value.sparse_col_indices}
+            for key, value in datum.loss_fn_inputs.items()
+        },
+    }
+    for field in ("model_input_spans", "loss_fn_input_spans"):
+        spans = getattr(datum, field)
+        result[field] = None if spans is None else [asdict(span) for span in spans]
+    return result
+
+
+async def optimize_data(data, training_client, learning_rate, output):
+    write_once(output / "optimization_attempt.json", {
+        "phase": "before_first_training_request", "datums": len(data),
+        "loss_fn": "importance_sampling", "learning_rate": learning_rate,
+    })
+    metrics = {}
+    started = time.monotonic()
+    logprobs = await train_step(
+        data, training_client, learning_rate, num_substeps=1,
+        loss_fn="importance_sampling", metrics=metrics,
+    )
+    write_json(output / "optimization_acknowledgement.json", {
+        "forward_backward_and_optim_step_awaited": True,
+        "returned_logprob_sequences": len(logprobs),
+        "optimizer_metrics": metrics,
+        "seconds": time.monotonic() - started,
+    })
+    return metrics
+
+
+async def resume_optimization(args):
+    """Repair a pre-optimizer failure using all original real trajectories and logprobs."""
+    original = read_json(args.resume_from / "training.json")
+    if args.mode != "train" or original["mode"] != "train" or not os.getenv("TINKER_API_KEY"):
+        raise ValueError("Resume requires train mode and a locally loaded Tinker key")
+    if original["optimization_steps_completed"] or list(args.resume_from.glob("**/optimization_acknowledgement.json")):
+        raise ValueError("Optimizer may already have run; refusing a duplicate update")
+    if list(args.resume_from.glob("**/optimization_attempt.json")):
+        raise ValueError("A training request may have been issued; reconcile it before recovery")
+    if original["model"] != args.model:
+        raise ValueError("Resume must use the original model")
+    if args.steps != 1 or original["requested_steps"] != 1:
+        raise ValueError("Recovery supports one pending update only")
+    if args.rank != original.get("rank", args.rank):
+        raise ValueError("Resume must use the original LoRA rank")
+    task = Task.load(args.public, args.hidden)
+    if task.spec.get("provenance", {}) != original["provenance"]:
+        raise ValueError("Task provenance changed")
+    reservation = original["budget_reservation"]
+    if args.resume_from.resolve() != Path(reservation["output"]).resolve():
+        raise ValueError("A copied run cannot reuse the original budget reservation")
+    if Path(reservation["ledger"]).resolve() != args.budget_ledger.resolve():
+        raise ValueError("Resume must use the existing budget reservation")
+    ledger = read_json(args.budget_ledger)
+    if ledger["limit_usd"] != args.max_cost_usd or not any(
+        entry["output"] == reservation["output"] and entry["reserved_usd"] == reservation["reserved_usd"]
+        for entry in ledger["reservations"]
+    ):
+        raise ValueError("Original approved reservation is missing")
+    batch = original["batches"][-1]
+    batch_source = args.resume_from / f"batch_{batch['batch']}"
+    if (batch_source / "training_data.json").exists() or original.get("error") != "'Datum' object has no attribute 'model_dump'":
+        raise ValueError("Recovery requires a proven pre-optimizer serialization failure")
+    payload = read_json(batch_source / "trajectories.json")
+    trajectories = []
+    for index, entry in enumerate(payload):
+        grade = read_json(batch_source / f"episode_{index}/grade.json")
+        if not grade["valid"] or grade["reward"] != batch["rewards"][index]:
+            raise ValueError("Saved execution grade does not agree with the group")
+        transitions = [Transition(
+            tinker.ModelInput.model_validate(item["observation"]),
+            TokensWithLogprobs(item["action_tokens"], item["logprobs"]),
+            item["reward"], False, item["metrics"],
+        ) for item in entry["transitions"]]
+        final_ob = tinker.ModelInput.model_validate(entry["final_ob"]) if "final_ob" in entry else tinker.ModelInput.from_ints([])
+        # Older records omitted final_ob; it is not used by assemble_training_data.
+        trajectories.append(Trajectory(transitions, final_ob, entry["stop_reason"]))
+    group = TrajectoryGroup(trajectories, [0.0] * len(trajectories), [{}] * len(trajectories))
+    if group.get_total_rewards() != batch["rewards"]:
+        raise ValueError("Trajectory rewards changed")
+    advantages = compute_advantages([group])
+    if not bool((advantages[0] != 0).any()):
+        raise ValueError("Saved group has no learning signal")
+    data, metadata = assemble_training_data([group], advantages)
+    args.output.mkdir(parents=True, exist_ok=False)
+    record = {**original, "status": "resuming", "optimization_steps_completed": 0,
+              "resumed_from": str(args.resume_from.resolve()), "resampled": False,
+              "training_client": "fresh initial LoRA; original sampling logprobs retained for importance sampling"}
+    record["original_failure"] = record.pop("error", None)
+    write_json(args.output / "training_data.json", {"datums": [serialize_datum(d) for d in data], "metadata": metadata})
+    write_json(args.output / "training.json", record)
+    claim_resume(args.resume_from, args.output)
+    try:
+        service = tinker.ServiceClient()
+        client = await service.create_lora_training_client_async(base_model=args.model, rank=args.rank)
+        metrics = await optimize_data(data, client, args.learning_rate or hyperparam_utils.get_lr(args.model), args.output)
+        record.update(optimization_steps_completed=1, status="optimization_acknowledged", optimizer_metrics=metrics)
+        write_json(args.output / "training.json", record)
+        await client.save_weights_and_get_sampling_client_async()
+        saved = await (await client.save_state_async("elt-final", ttl_seconds=86400)).result_async()
+        record.update(status="optimization_completed", checkpoint=saved.path)
+    except Exception as error:
+        record.update(status="failed", error=safe_error(error))
+        raise
+    finally:
+        write_json(args.output / "training.json", record)
+    print("optimization_completed; reused original execution-derived rewards and sampled logprobs")
+
+
+def claim_resume(original: Path, output: Path):
+    # An exclusive receipt prevents concurrent/repeated spending of the same reservation.
+    write_once(original / "optimization_resume_claim.json", {"output": str(output.resolve())})
+
+
+def write_once(path: Path, payload: dict):
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(payload, stream)
+
+
 def main():
     args = arguments()
     try:
-        asyncio.run(run(args))
+        asyncio.run(resume_optimization(args) if args.resume_from else run(args))
     except Exception as error:
         raise SystemExit(safe_error(error)) from None
 

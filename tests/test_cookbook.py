@@ -110,3 +110,99 @@ def test_constant_rewards_produce_no_learning_signal():
         [Trajectory([], tinker.ModelInput.from_ints([])) for _ in range(4)], [0.5] * 4, [{}] * 4
     )
     assert compute_advantages([group])[0].tolist() == [0.0] * 4
+
+
+def test_sdk_dataclass_datum_serialization_preserves_tensors():
+    from elt_tinker.recipe import serialize_datum
+
+    datum = tinker.Datum(
+        model_input=tinker.ModelInput.from_ints([1, 2]),
+        loss_fn_inputs={"logprobs": torch.tensor([-0.5, -0.25]), "advantages": torch.tensor([0.0, 0.25])},
+    )
+    payload = json.loads(json.dumps(serialize_datum(datum)))
+    restored = tinker.Datum(
+        model_input=tinker.ModelInput.model_validate(payload["model_input"]),
+        loss_fn_inputs={k: tinker.TensorData(**v) for k, v in payload["loss_fn_inputs"].items()},
+    )
+    assert restored.model_input.model_dump() == datum.model_input.model_dump()
+    for key in datum.loss_fn_inputs:
+        assert torch.equal(restored.loss_fn_inputs[key].to_torch(), datum.loss_fn_inputs[key].to_torch())
+
+
+def test_uncertain_training_request_cannot_be_issued_twice(tmp_path, monkeypatch):
+    from elt_tinker import recipe
+
+    issued = []
+
+    async def lost_response(*args, **kwargs):
+        assert (tmp_path / "optimization_attempt.json").exists()
+        issued.append(True)
+        raise RuntimeError("unit fault: response lost after sending")
+
+    monkeypatch.setattr(recipe, "train_step", lost_response)
+
+    async def exercise():
+        with pytest.raises(RuntimeError):
+            await recipe.optimize_data([], None, 1e-5, tmp_path)
+        with pytest.raises(FileExistsError):
+            await recipe.optimize_data([], None, 1e-5, tmp_path)
+
+    asyncio.run(exercise())
+    assert len(issued) == 1
+
+
+def test_group_failure_waits_for_sibling_before_cleanup(monkeypatch):
+    from elt_tinker import cookbook_env
+
+    async def exercise():
+        finished = asyncio.Event()
+
+        class Builder:
+            async def make_envs(self):
+                return ["failed", "sibling"]
+
+            async def cleanup(self):
+                assert finished.is_set()
+
+        async def scripted_rollout(policy, env):
+            if env == "failed":
+                raise InfrastructureError("unit test service failure")
+            await asyncio.sleep(0.02)
+            finished.set()
+            return object()
+
+        monkeypatch.setattr(cookbook_env, "do_single_rollout", scripted_rollout)
+        builder = Builder()
+        try:
+            with pytest.raises(InfrastructureError):
+                await cookbook_env.CompleteGroup().execute(builder, None)
+        finally:
+            await builder.cleanup()
+
+    asyncio.run(exercise())
+
+
+def test_cancelled_sync_work_finishes_before_cleanup():
+    import threading
+
+    from elt_tinker.cookbook_env import complete_sync
+
+    async def exercise():
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+        def operation():
+            started.set()
+            assert release.wait(2)
+            finished.set()
+
+        work = asyncio.create_task(complete_sync(operation))
+        await asyncio.to_thread(started.wait, 2)
+        work.cancel()
+        await asyncio.sleep(0)
+        assert not work.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await work
+        assert finished.is_set()
+
+    asyncio.run(exercise())
