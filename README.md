@@ -1,6 +1,6 @@
 # ELT-Bench + Tinker RLVR starter
 
-面向 ELT-Bench 的有状态工具环境、执行评分与 Tinker RL recipe。固定官方 shipping task 为首个目标，DuckDB 用于无需凭据测试，Snowflake 用于待运行的官方验收。原生源 clients 替代 Airbyte 控制面；该选择与教授任务原文相容，但不声称复现论文中的 Airbyte/Terraform/dbt 代理成绩。
+面向 ELT-Bench 的有状态工具环境、执行评分与 Tinker RL recipe。固定官方 shipping task 为首个目标，DuckDB 用于无需凭据测试，Snowflake 用于官方带凭据运行。原生源 clients 替代 Airbyte 控制面；该选择与教授任务原文相容，但不声称复现论文中的 Airbyte/Terraform/dbt 代理成绩。
 
 ## 当前验收边界
 
@@ -100,6 +100,7 @@ SDK 0.32的Datum/TensorData使用dataclass；本项目显式保存数值数据�
 - docs/guide_steps_1_2.md：原理、官方 shipping、状态/工具、论文差异、reward 与 GRPO。
 - docs/implementation_design.md：提交用简洁设计草稿。
 - docs/verification.md：回归、安全边界、性能与待验证限制。
+- docs/improvement_plan.md：提交前接口修复、检查门禁和字段反馈对照计划；不计作已完成实验。
 - TASK_STATE.md：仅本地保存的工作状态与恢复记录，不上传 GitHub；仓库验收说明见 docs/verification.md。
 - THIRD_PARTY.md：固定版本来源、许可证与贡献边界。
 

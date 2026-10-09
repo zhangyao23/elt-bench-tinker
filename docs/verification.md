@@ -23,7 +23,7 @@
 | 环境坏掉变成“模型失败” | valid=false/reward=null，整组排除；source missing/invalid group 测试 |
 | 恒定 reward 或手工设 reward 冒充更新 | cookbook 组中心化；全相同跳过；训练 acknowledgement 仅在真实 futures 返回后写 |
 
-Snowflake 的实际 RBAC、stage/类型行为和失败资源清理尚待账号验证，不能只凭 AST 单层检查宣称安全。raw role 单独于模型 role，secondary roles 关闭；管理员必须保证 ELT_AGENT 不继承 loader/admin/生产权限。保留隐藏参考不能消除公开 benchmark 答案记忆或硬编码风险；未把一个 task 的通过当泛化训练效果。
+Snowflake 已通过真实公钥认证、五源加载、模型转换、独立重放和 schema 清理；实际权限探针允许 raw SELECT/model CREATE，拒绝 raw UPDATE/CREATE。loader 与 agent role 分开，secondary roles 关闭；管理员必须保证 ELT_AGENT 不继承 loader/admin/生产权限。多个 episode 共用 ELT_AGENT，随机 schema 与 AST 关系限制共同隔离；数据库角色本身不能单独阻止访问该角色已获授权的其他 episode schema，因此不能宣称已实现每个 episode 独立角色隔离。没有观察到跨 episode 绕过；保留隐藏参考不能消除公开 benchmark 答案记忆或硬编码风险。
 
 ## Step 5：效率实测与简化审查
 
@@ -35,15 +35,18 @@ Snowflake 的实际 RBAC、stage/类型行为和失败资源清理尚待账号�
 | 评分中位数 | 0.07797 s | 0.06766 s |
 | Python 分配峰值中位数 | 420143 B | 419793.5 B |
 
-证据：runs/benchmark-before.json、runs/benchmark-after.json。优化只复用已计算的 source 内容指纹；actual warehouse 指纹、fresh source reader 和最终 query 仍实际执行。中位时间约下降 13%，但样本小且存在调度噪声，只能作为本地微型 fixture 结果；tracemalloc 不含 DuckDB/Arrow native 内存。没有测量 Snowflake/API sampler 的吞吐或端到端训练时间。
+证据：runs/benchmark-before.json、runs/benchmark-after.json。优化只复用已计算的 source 内容指纹；actual warehouse 指纹、fresh source reader 和最终 query 仍实际执行。中位时间约下降 13%，但样本小且存在调度噪声，只能作为本地微型 fixture 结果；tracemalloc 不含 DuckDB/Arrow native 内存。尚无云端优化前后的同条件对照，也未单独测量 API sampler 吞吐。
+
+真实运行耗时已进一步从保存轨迹核对：9B 基线总体 113.544 s，初始 run_load 20.099 s，query 累计 1.008 s，transform 累计 2.676 s，submit/grading 29.412 s。replay 23.209 s 包含在 grading 内；初始与 replay 两次加载累计 37.916 s、源抽取累计 0.572 s，不能把这些重叠项再次相加。4条并行训练采样的组耗时为 176.964 s；其余时间不能全部归因于模型采样。证据：runs/optimization_diagnosis_20261010.json。
 
 按 Ponytail/code-simplification 做有范围审查：把 fixture 从 tests 移入安装包、去掉无效 dictionary wrapper、按职责拆分 dispatch/raw verification/model grading、保留统一 SQL boundary；没有改上游训练实现或 comparator。SQL 检查与网络调用次数未为“简化”而增加；source 缓存使用副本，模型不能写它。现有功能/回归均需通过最终检查。
 
-## 未解决资源
+## 已知限制与交付状态
 
 - WSL已恢复默认Ubuntu-22.04-Recovered，Podman3.4.4运行本地源容器；5源均已验证。旧Ubuntu登记保留，避免注销误删同一磁盘。镜像按固定digest下载并核验，当前trusted本地容器未启用cgroup配额，正式扩大负载需合适资源限制。
 - 三项运行验收已有真实证据。预算账本约束全部运行的保守token与24小时checkpoint存储预留，不是服务端实时账单硬限额；warehouse/tax另计，实际账单可能延迟。
-- implementation design是待云验收后更新的草稿，尚未向教授提交或发送邮件。私人通信、凭据、运行数据和操作员状态不上传实现仓库。
+- implementation design 已根据真实云运行更新，本地文档正在做提交前核对；正式 Google Doc、向教授提交和邮件尚未完成。私人通信、凭据、运行数据和操作员状态不上传实现仓库。
+- 当前 SQL 接口会拒绝合法的 models 限定目标以及部分日期/窗口表达式，查询日期默认反馈为 epoch-ms；这些限制与模型 SQL/业务语义错误分开记录。后续修复与反馈研究需固定官方 reward，不把接口修复当作算法创新，也不从离线诊断推定成功率提升。
 
 ## 2026-10-09 真实云验收
 
@@ -55,6 +58,6 @@ Snowflake 的实际 RBAC、stage/类型行为和失败资源清理尚待账号�
 
 实际查询SQL/结果CSV保存在replay的warehouse_results。原4B三条失败、9B基线部分错误以及SDK序列化失败均保留，不追认成满分。replay CLI对非满分pipeline返回exit1，但valid/reward一致，证明可重放，不代表任务完全正确。
 
-SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组实际轨迹和采样logprobs，创建同base/rank新初始learner进行importance_sampling，不宣称恢复了原client或重复采样。恢复receipt阻止同一预留重复更新。API确认返回9个训练logprob序列；optimizer额外metrics为空，未虚构梯度范数。服务端checkpoint大小567621237字节，24小时TTL。
+SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组实际轨迹和采样logprobs，创建同base/rank新初始learner进行importance_sampling，不宣称恢复了原client或重复采样。恢复receipt阻止同一预留重复更新。API确认返回9个训练logprob序列；optimizer额外metrics为空，未虚构梯度范数。服务端checkpoint大小567621237字节，最初24小时TTL；随后按用户选择延长7天，expires_at 为 2026-10-16T15:42:32.196595+00:00（北京时间2026-10-16 23:42）。本地 LoRA 备份不含优化器状态，不随云端TTL到期删除。
 
 真实数据mask核验：39631采样action tokens全部被训练，观察tokens的advantage为零。一个真实更新证明训练链路执行成功，尚未比较更新前后准确率。型号、提示和token上限在调试中变化，结果不构成受控消融或算法性能结论。
