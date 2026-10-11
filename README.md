@@ -1,15 +1,19 @@
 # ELT-Bench + Tinker RLVR starter
 
+**For reviewers:** start with the [English reviewer guide](docs/reviewer_guide.md) for installation, the three acceptance checks and the validated configuration. The [implementation design](docs/implementation_design.md) explains the architecture and tradeoffs. The remaining README is the detailed Chinese operator guide.
+
+Current evidence: 79 local tests passed; one official shipping/Snowflake rollout matched 16/16 columns and reproduced in a separate process; one real Tinker RL step was acknowledged. The successful rollout used base weights. Post-update performance has not been evaluated; experimental feedback options have not demonstrated benefits.
+
 面向 ELT-Bench 的有状态工具环境、执行评分与 Tinker RL recipe。固定官方 shipping task 为首个目标，DuckDB 用于无需凭据测试，Snowflake 用于官方带凭据运行。原生源 clients 替代 Airbyte 控制面；该选择与教授任务原文相容，但不声称复现论文中的 Airbyte/Terraform/dbt 代理成绩。
 
 ## 当前验收边界
 
-三项真实运行证据来自保留的v0.1基线标签 `starter-baseline-20261010`。v0.2开发分支已修复SQL接口、增加ISO日期/实际类型/工具状态反馈和默认关闭的字段覆盖检查；新版本的本地验证见docs/verification.md，尚未进行新的模型A/B或RL更新。
+三项最低运行证据来自保留的v0.1基线；后续修复版另完成官方shipping满分rollout和独立重放。最新控制变量试运行代码为`0699e18`，结果文档为`ab4dc8c`；没有更新后的模型效果评估。接口、字段反馈及实验性压缩/年份提示见下文，真实对照见docs/ablation_results_20261010.md。
 
 | 验收 | 状态 |
 |---|---|
-| 无凭据 integration | CSV/DuckDB/错误修复/独立进程重放已通过；见 docs/verification.md |
-| 官方带凭据 rollout | Qwen3.5-9B在shipping/Snowflake实际提交pipeline，reward0.8125（13/16列），独立进程重放一致；任务尚未完全解对 |
+| 无凭据 integration | CSV/DuckDB/错误修复/独立进程重放已通过；最新本地79项测试、Lint、构建及源码外wheel验证通过 |
+| 官方带凭据 rollout | Qwen3.5-9B在shipping/Snowflake实际提交；原基线13/16，后续共同配置一条16/16，独立进程重放一致；不代表稳定成功率或全benchmark完成 |
 | 真实 Tinker RL optimization | 已完成一次非零优势真实更新，保存服务应答与checkpoint；详见docs/verification.md |
 
 官方 shipping 快照的人工 SQL 本地诊断 reward=1、2 模型/16 列匹配 v5 GT。这是版本/数据诊断，使用 file snapshots 与人工 SQL，不是模型驱动的带凭据官方 rollout。原生 cookbook token 环境也已在本地测试；动作是脚本提供，没有使用模型采样或本地训练冒充 Tinker 优化。

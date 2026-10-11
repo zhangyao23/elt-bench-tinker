@@ -1,6 +1,18 @@
 # Step 3–5 验证与边界
 
-## 当前证据
+## 当前验收摘要（2026-10-12整理）
+
+英文运行入口见[reviewer guide](reviewer_guide.md)，设计见[implementation design](implementation_design.md)。以下数字对应已保存的实际运行，没有在文档整理时新增测试或费用。
+
+| 当前验收 | 结果 | 私密证据（不随Git发布） |
+|---|---|---|
+| 本地integration | 最新79项测试、Lint、wheel/sdist、源码外安装和独立重放通过 | runs/controlled_ablation_20261010/tests.log、wheel_outside_root/acceptance.json |
+| 官方shipping模型rollout | 修复后的共同配置一条16/16、R1，独立Snowflake进程重放一致 | runs/controlled_ablation_20261010/baseline/、baseline_independent_replay/ |
+| 真实Tinker优化 | 原4轨迹执行奖励产生非零优势，服务确认1次优化及checkpoint；未评估训练后效果 | runs/tinker_step_20261009_9b_resume_01/optimization_acknowledgement.json |
+
+最新三组对照及代码ref见[实际结果](ablation_results_20261010.md)。共同配置满分来自base模型；压缩组未提交，年份组12/16且提示0次，不认定优化有效。下面按阶段保留历史证据：46/69/76是当时版本的测试数量，13/16是原始9B基线，不能替代本节当前摘要。
+
+## 原始环境与数据兼容证据（历史）
 
 原始固定 comparator 未修改；与材料源码的 SHA-256 完全相同。官方任务 data_model 与 5 个 schema 和固定 HF revision 一致：runs/version_audit.json。五个源数据 SHA/行数/类型/内容指纹及 driver Parquet 双来源一致性：runs/source_download_audit.json、runs/source_integrity_audit.json。
 
@@ -74,7 +86,7 @@ SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组�
 - 最后P3修复后再次各10次测量：off0.126606s/on0.114016s，顺序与首轮相反；benchmark_final_off/on.json保留。小样本顺序测量不支持稳定的总耗时收益或退化判断，不选择更好的一轮声称提速；额外元数据查询及其phase耗时仍实际记录。
 - 新增GitHub Actions使用锁定本地依赖、固定Actions SHA、只读权限、构建wheel、无凭据测试及项目外独立replay。不安装Tinker/cookbook、不配置云凭据；可选测试的skip数会公开显示。只有实际workflow完成才能报告远程CI通过。
 
-新版本没有新增Tinker采样/训练，也没有证明模型任务成功率提高。原三项真实运行证据与新接口/反馈验证分开报告。
+在上述本地/人工预检阶段，尚未进行v0.2模型采样或新增训练。后续真实试运行见下一节和顶部当前摘要；新增采样不等于新增RL更新，也没有证明稳定成功率提升。
 
 ## 2026-10-10 真实试运行与上下文修复
 
