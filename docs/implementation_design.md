@@ -1,10 +1,12 @@
 # ELT-Bench + Tinker: Implementation Design
 
-Yao Zhang | 12 October 2026
+Yao Zhang | 13 October 2026
 
-Repository: https://github.com/zhangyao23/elt-bench-tinker/tree/codex/reliability-feedback
+Repository: https://github.com/zhangyao23/elt-bench-tinker/tree/starter-delivery-20261013
 
-Validated rollout code: `0699e18`; recorded results: `ab4dc8c`. The original training acceptance used `9def90c`; subsequent changes were evaluated separately.
+Frozen package: 0.3.1. Recommended rollout uses the public model with field coverage enabled, compaction and year hints disabled.
+
+Three-arm rollout code: `0699e18`; recorded results: `ab4dc8c`. The original training acceptance used `9def90c`. A checkpoint-only evaluation entry was added on 13 October; its runtime file hashes and actual evidence are retained separately.
 
 ## 1. Scope and implementation choices
 
@@ -24,7 +26,7 @@ I use terminal outcome rewards because warehouse correctness is directly verifia
 
 The recipe reuses cookbook tools, renderer, multi-turn environment, rollouts, group-centered advantages, trajectory conversion and training steps. Only generated action tokens are trained; sampled logprobs are preserved. The importance-sampling loss follows cookbook, without claiming an exact DeepSeekMath reproduction. Constant-reward groups are skipped. Optimization requires awaited real forward/backward and optimizer results.
 
-One four-rollout group produced rewards [0, 0.875, 0, 0.9375]. An SDK serialization error occurred before optimization. After repair, the complete real trajectories, observations, rewards and logprobs were reused with a fresh initial learner of the same base/rank. One actual optimization step was acknowledged, and checkpoint/LoRA backup saved. No post-update evaluation was performed; this establishes the training chain, not improved accuracy.
+One four-rollout group produced rewards [0, 0.875, 0, 0.9375]. An SDK serialization error occurred before optimization. After repair, the complete real trajectories, observations, rewards and logprobs were reused with a fresh initial learner of the same base/rank. One actual optimization step was acknowledged, and checkpoint/LoRA backup saved. A later single post-update rollout loaded this checkpoint but reached 24 turns without submitting (R0). No improvement has been demonstrated.
 
 ## 4. Reward hacking and efficiency
 
@@ -34,8 +36,10 @@ Phase timings cover extraction, loading, SQL, replay and grading. Fingerprint re
 
 ## 5. Validation and findings
 
-- **Local integration:** real extraction/loading, SQL error/repair, submission and independent replay pass without credentials. Current local tests: 79 passed; Lint, build and installed-wheel replay pass. Code CI passed with optional cookbook tests skipped in its minimal environment.
+- **Local integration:** real extraction/loading, SQL error/repair, submission and independent replay pass without credentials. Frozen 0.3.1: 90 native local tests, Lint, build and clean installed-wheel replay passed. Earlier code CI passed with optional cookbook checks skipped in its minimal environment; this is separate from the full local suite.
 - **Official rollout:** Qwen3.5-9B completed shipping in Snowflake with reward 1.0 and 16/16 matched columns; independent-process replay agreed. This is one successful base-model rollout, not full-benchmark coverage or post-training improvement.
 - **Real RL optimization:** one acknowledged step used execution-derived rewards and 39,631 generated action tokens; acknowledgement and checkpoint evidence are retained.
 
 Three single-rollout trials with fixed code/model/data/budgets and seed schedule tested the common baseline, compaction only and public-year hints only. Results were 16/16, unsubmitted R0 and 12/16. Year hints triggered zero times; identical inputs with the same seed still yielded different actions. These trials do not establish optimization benefits. Both options remain experimental. Successful and failed runs are documented; private evidence and credentials are excluded from Git.
+
+The single post-update trial used the common configuration: 30 tools, 9,011 generated tokens and 177.12s, versus the historical base-model trial's 19 tools, 3,568 tokens and 91.66s. Output correctness is unknown without submission; this comparison does not establish a population success rate or causal RL effect.

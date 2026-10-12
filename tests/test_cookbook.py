@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,72 @@ from elt_tinker.cookbook_env import ELTGroupBuilder, build_elt_env
 from elt_tinker.environment import Episode
 from elt_tinker.errors import InfrastructureError
 from elt_tinker.local_fixture import GOOD_SQL, local_task
+from elt_tinker.recipe import create_evaluation_sampler, load_evaluation_checkpoint
+
+
+@pytest.mark.parametrize("trained, loaded_model, loaded_rank", [
+    (False, "Qwen/Qwen3.5-9B", 16), (True, "Qwen/Qwen3.5-9B", 16),
+    (True, "other-model", 16), (True, "Qwen/Qwen3.5-9B", 8),
+])
+def test_evaluation_sampler_loads_weights_without_optimization(trained, loaded_model, loaded_rank):
+    calls = []
+    model = "Qwen/Qwen3.5-9B"
+    checkpoint = {"checkpoint": "tinker://test/weights/updated", "rank": 16} if trained else None
+    sampler = object()
+
+    class Client:
+        async def get_info_async(self):
+            return tinker.types.GetInfoResponse(
+                model_id="test", model_data=tinker.types.ModelData(model_name=loaded_model),
+                is_lora=True, lora_rank=loaded_rank,
+            )
+
+        async def save_weights_and_get_sampling_client_async(self):
+            calls.append("sample_loaded_weights")
+            return sampler
+
+    class Service:
+        def create_sampling_client(self, *, base_model):
+            calls.append(("sample_public_model", base_model))
+            return sampler
+
+        async def create_training_client_from_state_async(self, path):
+            calls.append(("load_checkpoint", path))
+            return Client()
+
+    if trained and (loaded_model != model or loaded_rank != 16):
+        with pytest.raises(ValueError, match="Loaded checkpoint model/rank"):
+            asyncio.run(create_evaluation_sampler(Service(), model, checkpoint))
+        assert calls == [("load_checkpoint", checkpoint["checkpoint"])]
+        return
+    assert asyncio.run(create_evaluation_sampler(Service(), model, checkpoint)) is sampler
+    assert calls == (
+        [("load_checkpoint", checkpoint["checkpoint"]), "sample_loaded_weights"]
+        if trained else [("sample_public_model", model)]
+    )
+
+
+@pytest.mark.parametrize("changed", [
+    {}, {"status": "failed"}, {"optimization_steps_completed": 0},
+    {"model": "other"}, {"rank": 8}, {"provenance": {"task": "other"}},
+    {"checkpoint": "tinker://test/sampler_weights/unverified"},
+])
+def test_evaluation_checkpoint_rejects_unconfirmed_or_mismatched_records(tmp_path, changed):
+    source = {
+        "mode": "train", "status": "optimization_completed", "optimization_steps_completed": 1,
+        "model": "Qwen/Qwen3.5-9B", "rank": 16, "provenance": {"task": "pinned"},
+        "checkpoint": "tinker://test/weights/updated", **changed,
+    }
+    record = tmp_path / "training.json"
+    record.write_text(json.dumps(source), encoding="utf-8")
+    args = SimpleNamespace(checkpoint_record=record, model="Qwen/Qwen3.5-9B", rank=16)
+    task = SimpleNamespace(spec={"provenance": {"task": "pinned"}})
+    if changed:
+        with pytest.raises(ValueError):
+            load_evaluation_checkpoint(args, task)
+    else:
+        result = load_evaluation_checkpoint(args, task)
+        assert result["checkpoint"] == source["checkpoint"] and result["rank"] == 16
 
 
 @pytest.fixture(scope="module")

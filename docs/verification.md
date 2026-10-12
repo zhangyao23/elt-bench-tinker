@@ -1,16 +1,18 @@
 # Step 3–5 验证与边界
 
-## 当前验收摘要（2026-10-12整理）
+## 当前验收摘要（2026-10-13整理）
 
 英文运行入口见[reviewer guide](reviewer_guide.md)，设计见[implementation design](implementation_design.md)。以下数字对应已保存的实际运行，没有在文档整理时新增测试或费用。
 
 | 当前验收 | 结果 | 私密证据（不随Git发布） |
 |---|---|---|
-| 本地integration | 最新79项测试、Lint、wheel/sdist、源码外安装和独立重放通过 | runs/controlled_ablation_20261010/tests.log、wheel_outside_root/acceptance.json |
+| 本地integration | 冻结0.3.1的90项原生本地测试、Lint、构建、源码外干净wheel安装及独立重放通过；之前88/9检查为评估阶段证据 | runs/final_freeze_20261013/tests.log、lint.log、build.log、clean_install.json |
 | 官方shipping模型rollout | 修复后的共同配置一条16/16、R1，独立Snowflake进程重放一致 | runs/controlled_ablation_20261010/baseline/、baseline_independent_replay/ |
-| 真实Tinker优化 | 原4轨迹执行奖励产生非零优势，服务确认1次优化及checkpoint；未评估训练后效果 | runs/tinker_step_20261009_9b_resume_01/optimization_acknowledgement.json |
+| 真实Tinker优化 | 原4轨迹执行奖励产生非零优势，服务确认1次优化及checkpoint；随后一次加载checkpoint评估有效但未提交，R0，无提升证据 | runs/tinker_step_20261009_9b_resume_01/optimization_acknowledgement.json；runs/post_rl_eval_20261013/result.json |
 
 最新三组对照及代码ref见[实际结果](ablation_results_20261010.md)。共同配置满分来自base模型；压缩组未提交，年份组12/16且提示0次，不认定优化有效。下面按阶段保留历史证据：46/69/76是当时版本的测试数量，13/16是原始9B基线，不能替代本节当前摘要。
+
+训练后单次评估见[2026-10-13报告](post_training_evaluation_20261013.md)：同一任务/评分/环境配置、原生Python、首观察一致、实际加载同9B/rank16的原优化checkpoint；24模型轮/30工具、7 SQL编译错误、9011生成tokens、177.12秒，未提交因此不补评分或重放。源码摘要及费用/清理证据保留，未新增优化。本地临时Windows后备路径仅用于解决准备时的WMI阻塞，正式采样前系统服务和五源已恢复。
 
 ## 原始环境与数据兼容证据（历史）
 

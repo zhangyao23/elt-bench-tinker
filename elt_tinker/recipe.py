@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import tinker
-from tinker_cookbook import hyperparam_utils, model_info, tokenizer_utils
+from tinker_cookbook import model_info, tokenizer_utils
 from tinker_cookbook.completers import TinkerTokenCompleter, TokensWithLogprobs
 from tinker_cookbook.renderers import get_renderer
 from tinker_cookbook.rl.data_processing import assemble_training_data, compute_advantages
@@ -83,7 +83,47 @@ def arguments():
     )
     parser.add_argument("--budget-ledger", type=Path, default=Path("runs/tinker_budget.json"))
     parser.add_argument("--resume-from", type=Path, help="Reuse a saved group before any optimizer call; no resampling")
-    return parser.parse_args()
+    parser.add_argument(
+        "--checkpoint-record", type=Path,
+        help="Rollout-only: evaluate the trained checkpoint in a completed training.json",
+    )
+    args = parser.parse_args()
+    if args.checkpoint_record and (args.mode != "rollout" or args.resume_from):
+        parser.error("--checkpoint-record requires rollout mode without --resume-from")
+    return args
+
+
+def load_evaluation_checkpoint(args, task):
+    if args.checkpoint_record is None:
+        return None
+    source = read_json(args.checkpoint_record)
+    steps = source.get("optimization_steps_completed")
+    if (
+        source.get("mode") != "train"
+        or source.get("status") != "optimization_completed"
+        or not isinstance(steps, int)
+        or steps < 1
+    ):
+        raise ValueError("Evaluation requires a completed real optimization record")
+    if source.get("model") != args.model or source.get("rank") != args.rank:
+        raise ValueError("Evaluation model/rank differ from the trained checkpoint")
+    if source.get("provenance") != task.spec.get("provenance", {}):
+        raise ValueError("Evaluation task provenance differs from the training task")
+    path = source.get("checkpoint", "")
+    if not isinstance(path, str) or not path.startswith("tinker://") or "/weights/" not in path:
+        raise ValueError("Completed record has no Tinker training-state checkpoint")
+    return {"checkpoint": path, "rank": source["rank"], "optimization_steps_completed": steps}
+
+
+async def create_evaluation_sampler(service, model, checkpoint):
+    if checkpoint is None:
+        return service.create_sampling_client(base_model=model)
+    client = await service.create_training_client_from_state_async(checkpoint["checkpoint"])
+    info = await client.get_info_async()
+    if (info.model_data.model_name or info.model_name) != model or info.lora_rank != checkpoint["rank"]:
+        raise ValueError("Loaded checkpoint model/rank differ from the evaluation configuration")
+    # Sampling only: no optimizer request and no new persistent checkpoint.
+    return await client.save_weights_and_get_sampling_client_async()
 
 
 async def run(args):
@@ -106,6 +146,7 @@ async def run(args):
     ):
         raise ValueError("Require 2048..65536 context tokens and a positive approved budget")
     task = Task.load(args.public, args.hidden)
+    checkpoint = load_evaluation_checkpoint(args, task)
     if task.spec.get("official") and args.destination != "snowflake":
         raise ValueError(
             "This official bundle pins Snowflake GT. Local DuckDB is a separate integration gate."
@@ -159,6 +200,7 @@ async def run(args):
         "requested_steps": args.steps,
         "max_batches": args.max_batches,
         "optimization_steps_completed": 0,
+        "weights_source": "trained_checkpoint" if checkpoint else "public_model",
         "rank": args.rank,
         "max_turns": args.max_turns,
         "context_tokens": args.context_tokens,
@@ -184,6 +226,10 @@ async def run(args):
         rate_card=rates,
         budget_excludes="warehouse and taxes; rate-card changes require a new run",
     )
+    if checkpoint:
+        record["evaluation_checkpoint"] = {
+            **checkpoint, "record": str(args.checkpoint_record.resolve()),
+        }
     write_json(args.output / "training.json", record)
     try:
         service = tinker.ServiceClient()
@@ -206,14 +252,16 @@ async def run(args):
         record["renderer"] = renderer_name
         write_json(args.output / "training.json", record)
         if args.mode == "train":
+            from tinker_cookbook import hyperparam_utils
+
             training_client = await service.create_lora_training_client_async(
                 base_model=args.model, rank=args.rank
             )
             sampling_client = await training_client.save_weights_and_get_sampling_client_async()
+            learning_rate = args.learning_rate or hyperparam_utils.get_lr(args.model)
         else:
             training_client = None
-            sampling_client = service.create_sampling_client(base_model=args.model)
-        learning_rate = args.learning_rate or hyperparam_utils.get_lr(args.model)
+            sampling_client = await create_evaluation_sampler(service, args.model, checkpoint)
         for batch_index in range(args.max_batches if args.mode == "train" else 1):
             batch_output = args.output / f"batch_{batch_index}"
             builder = ELTGroupBuilder(
@@ -427,6 +475,8 @@ async def optimize_data(data, training_client, learning_rate, output):
 
 async def resume_optimization(args):
     """Repair a pre-optimizer failure using all original real trajectories and logprobs."""
+    from tinker_cookbook import hyperparam_utils
+
     original = read_json(args.resume_from / "training.json")
     if args.mode != "train" or original["mode"] != "train" or not os.getenv("TINKER_API_KEY"):
         raise ValueError("Resume requires train mode and a locally loaded Tinker key")

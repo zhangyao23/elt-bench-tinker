@@ -4,15 +4,17 @@
 
 The implementation covers official **shipping** with five native source readers, Snowflake execution and a Tinker RL recipe. DuckDB provides credential-free integration. Start with [implementation design](implementation_design.md), then use the commands below. Detailed experiment results are in [the three-arm report](ablation_results_20261010.md); upstream revisions and licenses are in [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-Run evidence: original RL acceptance code `9def90c`; latest rollout/interface code `0699e18`; recorded comparison results `ab4dc8c`, on branch `codex/reliability-feedback`. Documentation-only revisions do not count as additional experiments. The preserved main/tag remains the earlier baseline.
+Run evidence: original RL acceptance code `9def90c`; three-arm rollout/interface code `0699e18`; recorded comparison results `ab4dc8c`, on branch `codex/reliability-feedback`. The checkpoint evaluation entry was added on 13 October and its runtime hashes are retained with the new result. Documentation-only revisions do not count as additional experiments. The preserved main/tag remains the earlier baseline.
 
 | Acceptance check | Evidence and scope |
 |---|---|
-| Credential-free integration | Real local extraction, loading, SQL error/repair, submission and separate-process replay pass. Latest full local suite: 79 passed; Lint, build and installed-wheel integration also pass. |
+| Credential-free integration | Real local extraction, loading, SQL error/repair, submission and separate-process replay pass. Frozen 0.3.1: 90 native local tests, Lint, build and clean installed-wheel integration/replay passed. |
 | Official credentialed rollout | Qwen3.5-9B completed shipping in Snowflake: 16/16 columns, R1, reproduced independently. This is one successful base-model rollout. |
-| Real Tinker RL optimization | One acknowledged step used warehouse-derived rewards [0, 0.875, 0, 0.9375], nonzero group-centered advantages and 39,631 generated action tokens. Checkpoint evidence is retained. No post-update evaluation has been run. |
+| Real Tinker RL optimization | One acknowledged step used warehouse-derived rewards [0, 0.875, 0, 0.9375], nonzero group-centered advantages and 39,631 generated action tokens. One subsequent evaluation loaded that checkpoint but reached 24 turns without submitting (R0); no improvement has been demonstrated. |
 
 Private raw run data and credentials are excluded from Git. The repository contains the implementation, reproduction instructions and aggregate findings. Local evidence paths listed in reports identify retained operator artifacts; those files are not expected to exist in a fresh clone.
+
+To evaluate your completed training checkpoint, reuse the rollout command below with `--checkpoint-record <completed training.json>`. This verifies the record, loads saved weights and checks the server model/rank before sampling, without another optimization step. Keep task, feedback and sampling limits fixed for comparisons. The [single post-update report](post_training_evaluation_20261013.md) records the negative result and its limitations.
 
 ## 1. Credential-free integration
 

@@ -2,17 +2,19 @@
 
 **For reviewers:** start with the [English reviewer guide](docs/reviewer_guide.md) for installation, the three acceptance checks and the validated configuration. The [implementation design](docs/implementation_design.md) explains the architecture and tradeoffs. The remaining README is the detailed Chinese operator guide.
 
-Current evidence: 79 local tests passed; one official shipping/Snowflake rollout matched 16/16 columns and reproduced in a separate process; one real Tinker RL step was acknowledged. The successful rollout used base weights. Post-update performance has not been evaluated; experimental feedback options have not demonstrated benefits.
+Frozen submission: [`starter-delivery-20261013`](https://github.com/zhangyao23/elt-bench-tinker/tree/starter-delivery-20261013), package 0.3.1. See the [release scope and recommended settings](docs/frozen_release.md). Recommended rollout: public model, field coverage enabled, compaction and year hints disabled. Negative results are retained.
+
+Current evidence: 90 native local tests, Lint, 0.3.1 build and clean installed-wheel integration/replay passed; one official shipping/Snowflake rollout matched 16/16 columns and reproduced in a separate process; one real Tinker RL step was acknowledged. The successful rollout used the public model. One subsequent trained-checkpoint rollout reached the turn limit without submitting (R0); neither RL improvement nor benefits from experimental feedback have been demonstrated. See the [post-update report](docs/post_training_evaluation_20261013.md).
 
 面向 ELT-Bench 的有状态工具环境、执行评分与 Tinker RL recipe。固定官方 shipping task 为首个目标，DuckDB 用于无需凭据测试，Snowflake 用于官方带凭据运行。原生源 clients 替代 Airbyte 控制面；该选择与教授任务原文相容，但不声称复现论文中的 Airbyte/Terraform/dbt 代理成绩。
 
 ## 当前验收边界
 
-三项最低运行证据来自保留的v0.1基线；后续修复版另完成官方shipping满分rollout和独立重放。最新控制变量试运行代码为`0699e18`，结果文档为`ab4dc8c`；没有更新后的模型效果评估。接口、字段反馈及实验性压缩/年份提示见下文，真实对照见docs/ablation_results_20261010.md。
+三项最低运行证据来自保留的v0.1基线；后续修复版另完成官方shipping满分rollout和独立重放。三组控制变量试运行代码为`0699e18`，结果文档为`ab4dc8c`；2026-10-13新增一次训练后checkpoint评估，达到24轮未提交，R0，未显示收益。新增入口与本地测试另行记录；接口、字段反馈及实验性压缩/年份提示见下文，真实对照见docs/ablation_results_20261010.md。
 
 | 验收 | 状态 |
 |---|---|
-| 无凭据 integration | CSV/DuckDB/错误修复/独立进程重放已通过；最新本地79项测试、Lint、构建及源码外wheel验证通过 |
+| 无凭据 integration | 冻结版本90项原生本地测试、Lint、wheel/sdist构建和源码外干净安装/独立重放通过 |
 | 官方带凭据 rollout | Qwen3.5-9B在shipping/Snowflake实际提交；原基线13/16，后续共同配置一条16/16，独立进程重放一致；不代表稳定成功率或全benchmark完成 |
 | 真实 Tinker RL optimization | 已完成一次非零优势真实更新，保存服务应答与checkpoint；详见docs/verification.md |
 
