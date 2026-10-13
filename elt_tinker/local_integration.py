@@ -16,6 +16,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("runs/local_integration"))
+    parser.add_argument("--field-feedback", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temporary:
         task = local_task(Path(temporary) / "task")
@@ -24,7 +25,7 @@ def main():
             ("correct", GOOD_SQL),
             ("wrong", GOOD_SQL.replace("COALESCE(SUM(o.amount), 0)", "0")),
         ):
-            episode = Episode(task, "duckdb", args.output / label)
+            episode = Episode(task, "duckdb", args.output / label, field_feedback=args.field_feedback)
             try:
                 load_all(episode)
                 bad = episode.act("transform", {"sql": sql.replace("o.amount", "o.missing")})
@@ -63,6 +64,7 @@ def main():
             args.output / "acceptance.json",
             {
                 "credential_free_integration": "passed",
+                "field_feedback": args.field_feedback,
                 "official_rollout": "not_run",
                 "tinker_optimization": "not_run",
                 "independent_replay": child.stdout.strip(),

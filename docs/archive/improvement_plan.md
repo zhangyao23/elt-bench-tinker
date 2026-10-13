@@ -1,5 +1,7 @@
 # ELT Bench 提交前改进计划
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 目标是在2026年10月12日周一前形成可靠、可复现、能解释设计理由的交付版本。先修复已经复现的环境接口问题，再评估一个可关闭的反馈改进。官方任务、源数据、终局评分及训练目标保持固定；这份计划尚未作为新的实验结果。
 
 采用小提交、自动化测试、隔离测试环境、小规模试运行和明确回退方式。这个做法参考 [Google SRE 发布工程与 canary 原则](https://sre.google/workbook/canarying-releases/) 和 [GitHub 检查门禁](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)。本项目用专用测试 warehouse 做受控试运行，没有生产用户流量，不将其描述成已经部署的生产 canary。
@@ -97,3 +99,19 @@
 交付包含安装/运行/清理说明、简洁implementation design、三项真实运行证据摘要、失败分析、安全和效率局限、第三方来源与许可证。若新增对照，单列它与原验收的关系。先整理本地文档，再准备正式Google Doc和邮件草稿；私有GitHub的教授访问方式在提交时确认。凭据、private runs、下载数据和原始通信不进入仓库。邮件、共享和正式提交仍由用户决定。
 
 完成标准是可复现实现、真实验收证据、清楚的改进结论与局限；全benchmark满分、新RL算法和训练效果显著提升不作为本次两天计划的要求。
+
+## 2026-10-12 三项效果指标的评价口径澄清
+
+本节是依据已完成实验明确评价标准，不是新的实验结果或付费运行授权；前文旧版本、预算及日期属于制定计划时的历史状态。当前三项运行验收齐全，但未做RL更新后效果评估。
+
+| 效果指标 | 明确定义 | 比较时的要求 |
+|---|---|---|
+| 完整成功率（主指标） | 同一配置下，显式提交、所有源加载完整且空状态重放后全部要求输出通过官方比较的有效独立rollout数 / 有效独立rollout总数 | 一列不匹配即不是完整成功；未提交算失败。每组同时报告成功数/样本数，样本小不宣称总体率或显著提升。新进程重放同一pipeline不增加模型样本数。 |
+| 提交率（诊断指标） | 限额内有效且显式提交pipeline的独立rollout数 / 有效独立rollout总数 | 提交不等于正确；提交率提高、完整成功率下降不能称任务效果改善。基础设施无效数及原因单独报告。 |
+| 成本与效率（次指标） | 每条轨迹累计输入/生成tokens、实际rollout耗时与分阶段计时；取得实际账单后另报告费用 | 包括失败消耗，不用保守预留冒充实际费用；输入/生成token分别记录。成功成本用整组实际费用/完整成功数，完整成功数为0时不定义。无账单时仅报告tokens与计时，不伪造美元成本。 |
+
+公平评估需要冻结task/源数据/官方evaluator、环境及反馈、模型采样配置、轮数/token/工具限制和并发，并在运行前确定样本数、终止规则和费用上限。评估RL时在同一冻结环境比较更新前/后模型；评估环境反馈时固定模型权重仅切换预注册的反馈。保持每条实际轨迹独立并保留全部失败；seed不保证服务逐token确定性。小样本报告观察，不采用事后挑选出的阈值或只展示最好结果。
+
+目前最接近同条件比较的是2026-10-10三组试运行，每组仅1条、均未使用本项目RL更新权重且字段反馈均开启：共同基线成功1/1、提交1/1、累计输入93573/生成3568tokens、91.66秒；仅压缩成功0/1、提交0/1、输入159388/生成7843、117.90秒；仅年份提示成功0/1、提交1/1、输入127004/生成4823、100.22秒（实际12/16）。年份提示触发0次，且seed不保证严格确定性。压缩未提交没有执行终局评分重放，其耗时与完成任务样本所含阶段不同，不计算提速百分比。这些单条观察不能证明稳定成功率、因果退化或RL收益。
+
+证据：docs/ablation_results_20261010.md；runs/controlled_ablation_20261010/results.json、test_plan.json、control_audit.json、independent_replay_results.json。当前不新增采样/优化步骤，不自动扩展费用上限。

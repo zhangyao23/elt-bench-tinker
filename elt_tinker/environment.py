@@ -5,13 +5,15 @@ import io
 import json
 import os
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 import sqlglot
 from sqlglot import exp
 
-from elt_tinker.errors import InfrastructureError
+from elt_tinker.errors import InfrastructureError, SQLPolicyError
+from elt_tinker.feedback import public_condition_warnings
 from elt_tinker.sources import SourceReader
 from elt_tinker.task import Task, fingerprint, safe_child, write_json
 from elt_tinker.upstream.eva_stage2 import check_corretness, sort_by_keys
@@ -33,6 +35,12 @@ def csv_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.read_csv(io.StringIO(frame.to_csv(index=False)), dtype=str, keep_default_na=True)
 
 
+def feedback_value(value):
+    if isinstance(value, (date, datetime)):
+        return None if pd.isna(value) else value.isoformat()
+    return value
+
+
 class Episode:
     def __init__(
         self,
@@ -41,6 +49,9 @@ class Episode:
         output: Path,
         operator_config: dict | None = None,
         max_calls: int = 48,
+        *,
+        field_feedback: bool = False,
+        condition_feedback: bool = True,
     ):
         self.task, self.destination, self.output = task, destination, Path(output)
         self.operator_config = operator_config or {}
@@ -49,9 +60,12 @@ class Episode:
         self.configured: dict[str, dict] = {}
         self.loaded: set[str] = set()
         self.sql: list[str] = []
+        self.created_models: set[str] = set()
         self.trace: list[dict] = []
         self.timings: list[dict] = []
         self.max_calls = max_calls
+        self.field_feedback = field_feedback
+        self.condition_feedback = condition_feedback
         self.done = self.submitted = False
         self.invalid_reason: str | None = None
         self.grade: dict | None = None
@@ -59,7 +73,7 @@ class Episode:
     def initial_prompt(self) -> str:
         return (
             "Solve this ELT task with tools. Inspect task and schemas, configure_load each source, "
-            "then run_load. Use transform with one CREATE OR REPLACE TABLE/VIEW <model> AS SELECT "
+            "then run_load. Use transform with one CREATE OR REPLACE TABLE/VIEW models.<model> AS SELECT "
             "per call; read sources as raw.<table>, outputs as models.<table>. Query actual data "
             "and repair SQL errors. Call submit_pipeline to finish; a final message alone does "
             "not submit. Scoring verifies loaded raw content, replays on an empty warehouse, "
@@ -110,6 +124,48 @@ class Episode:
             "provenance": self.task.spec.get("provenance", {}),
         }
 
+    def _output_schema_feedback(self, statement: exp.Create) -> dict | None:
+        target = statement.this
+        model = next(
+            (m for m in self.task.spec["models"] if m["name"].lower() == target.name.lower()),
+            None,
+        )
+        if model is None:
+            return None
+        if not model.get("columns"):
+            return {"available": False, "reason": "No public output-column specification"}
+        started = time.monotonic()
+        try:
+            query = exp.select("*").from_(target.copy()).limit(0).sql(dialect=self.warehouse.dialect)
+            frame = model_sql(self.warehouse, query, query=True)
+            required = [column["name"] for column in model["columns"]]
+            actual = list(frame.columns)
+            required_names = {name.lower() for name in required}
+            actual_names = {name.lower() for name in actual}
+            missing = sorted(required_names - actual_names)
+            return {
+                "available": True,
+                "model": model["name"],
+                "required_columns": required,
+                "actual_columns": actual,
+                "column_types": frame.attrs.get("column_types", {}),
+                "missing_columns": missing,
+                "extra_columns": sorted(actual_names - required_names),
+                "coverage_complete": not missing,
+                "values_verified": False,
+                "condition_review": (
+                    public_condition_warnings(model, statement.expression)
+                    if self.condition_feedback else []
+                ),
+            }
+        except ValueError as error:
+            # SQL already executed and was recorded; a failed inspection must not undo it.
+            return {"available": False, "error": safe_error(error)}
+        finally:
+            self.timings.append(
+                {"phase": "field_feedback", "table": model["name"], "seconds": time.monotonic() - started}
+            )
+
     def _dispatch(self, action: str, arguments: dict):
         if action == "inspect_task":
             return self.task.describe()
@@ -140,12 +196,23 @@ class Episode:
             )
             return {
                 "columns": list(frame.columns),
-                "rows": json.loads(frame.to_json(orient="records")),
+                "column_types": frame.attrs.get("column_types", {}),
+                "rows": json.loads(frame.map(feedback_value).to_json(orient="records")),
             }
         if action == "transform":
-            model_sql(self.warehouse, self.sql_for(arguments["sql"], transform=True))
+            sql = self.sql_for(arguments["sql"], transform=True)
+            statement = sqlglot.parse_one(sql, read=self.warehouse.dialect)
+            target = statement.this
+            model_sql(self.warehouse, sql)
             self.sql.append(arguments["sql"])
-            return {"executed": True, "pipeline_statements": len(self.sql)}
+            if target.name.lower() in {model["name"].lower() for model in self.task.spec["models"]}:
+                self.created_models.add(target.name.lower())
+            feedback = {"executed": True, "pipeline_statements": len(self.sql)}
+            if self.field_feedback:
+                schema_feedback = self._output_schema_feedback(statement)
+                if schema_feedback is not None:
+                    feedback["output_schema"] = schema_feedback
+            return feedback
         if action == "submit_pipeline":
             self.submitted = self.done = True
             write_json(self.output / "pipeline.json", self.pipeline())
@@ -162,13 +229,39 @@ class Episode:
         except InfrastructureError as error:
             self.invalid_reason, self.done = safe_error(error), True
             result = {"ok": False, "error": self.invalid_reason, "error_kind": "infrastructure"}
+        except SQLPolicyError as error:
+            result = {
+                "ok": False,
+                "error": safe_error(error),
+                "error_kind": "action",
+                "error_category": "sql_policy",
+            }
         except (KeyError, ValueError, TypeError, sqlglot.errors.ParseError) as error:
             result = {"ok": False, "error": safe_error(error), "error_kind": "action"}
         except Exception as error:
             self.invalid_reason, self.done = f"Environment failure ({type(error).__name__})", True
             result = {"ok": False, "error": self.invalid_reason, "error_kind": "infrastructure"}
+        calls_used = len(self.trace) + 1
+        if calls_used >= self.max_calls:
+            self.done = True
+        state = {
+            "configured_sources": sorted(self.configured),
+            "loaded_sources": sorted(self.loaded),
+            "successful_transform_statements": len(self.sql),
+            "created_models": sorted(self.created_models),
+            "tool_calls_used": calls_used,
+            "tool_calls_remaining": max(0, self.max_calls - calls_used),
+            "submitted": self.submitted,
+            "ended": self.done,
+        }
+        result["state"] = state
         if len(json.dumps(result, default=str)) > 12000:
-            result = {"ok": False, "error": "Feedback exceeds 12k; select fewer/smaller columns"}
+            result = {
+                "ok": False,
+                "error": "Feedback exceeds 12k; select fewer/smaller columns",
+                "error_kind": "action",
+                "state": state,
+            }
         self.trace.append(
             {
                 "tool": action,
@@ -177,8 +270,6 @@ class Episode:
                 "seconds": time.monotonic() - started,
             }
         )
-        if len(self.trace) >= self.max_calls:
-            self.done = True
         write_json(self.output / "tool_trace.json", self.trace)
         return result
 

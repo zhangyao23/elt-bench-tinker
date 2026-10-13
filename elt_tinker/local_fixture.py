@@ -50,6 +50,10 @@ def local_task(root: Path) -> Task:
                 {
                     "name": "summary",
                     "description": "Each customer, total ordered amount (0 without orders), num_orders; retain all customers.",
+                    "columns": [
+                        {"name": "id"}, {"name": "name"},
+                        {"name": "total"}, {"name": "num_orders"},
+                    ],
                 }
             ],
         },

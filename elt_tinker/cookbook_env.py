@@ -9,10 +9,12 @@ from tinker_cookbook.rl.rollout_strategy import RolloutResult, RolloutStrategy
 from tinker_cookbook.rl.rollouts import do_single_rollout
 from tinker_cookbook.rl.types import EnvGroupBuilder
 from tinker_cookbook.tool_use import build_agent_tool_env
+from tinker_cookbook.tool_use.agent_tool_message_env import AgentToolMessageEnv
 from tinker_cookbook.tool_use.tools import simple_tool_result, tool
 
 from elt_tinker.environment import Episode, safe_error
 from elt_tinker.errors import InfrastructureError
+from elt_tinker.feedback import compact_tool_feedback
 from elt_tinker.task import Task, write_json
 
 
@@ -41,8 +43,10 @@ class CompleteGroup(RolloutStrategy):
 
 
 class ELTTools:
-    def __init__(self, episode: Episode):
+    def __init__(self, episode: Episode, compact_feedback: bool = False):
         self.episode = episode
+        self.compact_feedback = compact_feedback
+        self.message_env: AgentToolMessageEnv | None = None
         self.lock = asyncio.Lock()
 
     async def _call(self, name: str, arguments: dict):
@@ -50,8 +54,23 @@ class ELTTools:
             if self.episode.done:
                 return simple_tool_result("Episode ended", should_stop=True)
             feedback = await complete_sync(self.episode.act, name, arguments)
+            if self.compact_feedback:
+                feedback = compact_tool_feedback(feedback)
+                if self.message_env is not None:
+                    # Fixed cookbook revision: _turn_count increments before tool dispatch.
+                    remaining = max(0, self.message_env.max_turns - self.message_env._turn_count)
+                    feedback["state"] = {
+                        **feedback.get("state", {}),
+                        "model_turns_remaining": remaining,
+                    }
+                    if remaining <= 2 and not self.episode.done:
+                        feedback["next_action_hint"] = "Submit your best existing pipeline before the model-turn limit; submission must be explicit."
             return simple_tool_result(
-                json.dumps(feedback, default=str), should_stop=self.episode.done
+                json.dumps(
+                    feedback, default=str,
+                    separators=(",", ":") if self.compact_feedback else None,
+                ),
+                should_stop=self.episode.done,
             )
 
     @tool
@@ -73,12 +92,12 @@ class ELTTools:
 
     @tool
     async def query(self, sql: str):
-        """Inspect actual warehouse state with a SELECT; at most 30 rows and 12k characters."""
+        """Inspect with SELECT; check rows_truncated and prefer focused or aggregate queries."""
         return await self._call("query", {"sql": sql})
 
     @tool
     async def transform(self, sql: str):
-        """Run one CREATE OR REPLACE TABLE/VIEW <model> AS SELECT; raw.<source>, models.<output>."""
+        """Run one CREATE OR REPLACE TABLE/VIEW models.<model> AS SELECT; read raw.<source>."""
         return await self._call("transform", {"sql": sql})
 
     @tool
@@ -103,8 +122,11 @@ def build_elt_env(
     max_turns: int = 24,
     context_tokens: int = 32768,
     generation_tokens: int = 2048,
+    *,
+    compact_feedback: bool = False,
 ):
-    tools = ELTTools(episode).all()
+    toolbox = ELTTools(episode, compact_feedback=compact_feedback)
+    tools = toolbox.all()
     messages = renderer.create_conversation_prefix_with_tools(
         tools=[tool.to_spec() for tool in tools],
         system_prompt=episode.initial_prompt(),
@@ -114,6 +136,13 @@ def build_elt_env(
             "content": "Inspect the task, implement the full ELT pipeline, and submit it.",
         }
     ]
+    if compact_feedback:
+        messages[-1]["content"] += (
+            f" Budget: {max_turns} model turns, {context_tokens} context tokens; "
+            "tool-call and model-turn limits differ. Query feedback previews at most six rows; "
+            "use WHERE/aggregates for statistics. Review requested time ranges, entities, "
+            "denominators, ties and NULLs before submission."
+        )
 
     async def reward_fn(history):
         grade = episode.grade or await complete_sync(episode.evaluate)
@@ -137,12 +166,15 @@ def build_elt_env(
         max_turns=max_turns,
         max_tool_calls=episode.max_calls,
         max_trajectory_tokens=context_tokens,
-        max_generation_tokens=generation_tokens,
+        # The actual completer still caps generation and clips it to remaining context.
+        # Reserve only a short submission turn instead of prematurely stopping at 4096.
+        max_generation_tokens=min(128, generation_tokens) if compact_feedback else generation_tokens,
         failed_parse_reward=0.0,
         context_overflow_reward=0.0,
     )
     # Cookbook defaults to parallel tool execution. Loads/transformations share state.
     environment.message_env.tool_execution = "sequential"
+    toolbox.message_env = environment.message_env
     return environment
 
 
@@ -158,6 +190,10 @@ class ELTGroupBuilder(EnvGroupBuilder):
         max_turns: int = 24,
         context_tokens: int = 32768,
         generation_tokens: int = 2048,
+        *,
+        field_feedback: bool = False,
+        compact_feedback: bool = False,
+        condition_feedback: bool = True,
     ):
         self.task, self.destination, self.output, self.renderer = (
             task,
@@ -166,6 +202,9 @@ class ELTGroupBuilder(EnvGroupBuilder):
             renderer,
         )
         self.group_size, self.operator_config = group_size, operator_config
+        self.field_feedback = field_feedback
+        self.compact_feedback = compact_feedback
+        self.condition_feedback = condition_feedback
         self.max_turns, self.context_tokens, self.generation_tokens = (
             max_turns,
             context_tokens,
@@ -184,13 +223,19 @@ class ELTGroupBuilder(EnvGroupBuilder):
                     self.max_turns,
                     self.context_tokens,
                     self.generation_tokens,
+                    compact_feedback=self.compact_feedback,
                 )
             )
         return environments
 
     def _create_episode(self, index):
         episode = Episode(
-            self.task, self.destination, self.output / f"episode_{index}", self.operator_config
+            self.task,
+            self.destination,
+            self.output / f"episode_{index}",
+            self.operator_config,
+            field_feedback=self.field_feedback,
+            condition_feedback=self.condition_feedback,
         )
         # Track it in the same sync operation, even if the awaiting caller is cancelled.
         self.episodes.append(episode)

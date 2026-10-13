@@ -1,6 +1,20 @@
 # Step 3–5 验证与边界
 
-## 当前证据
+## 当前验收摘要（2026-10-13整理）
+
+英文运行入口见[reviewer guide](reviewer_guide.md)，设计见[implementation design](implementation_design.md)。以下数字对应已保存的实际运行，没有在文档整理时新增测试或费用。
+
+| 当前验收 | 结果 | 私密证据（不随Git发布） |
+|---|---|---|
+| 本地integration | 冻结0.3.1的90项原生本地测试、Lint、构建、源码外干净wheel安装及独立重放通过；之前88/9检查为评估阶段证据 | runs/final_freeze_20261013/tests.log、lint.log、build.log、clean_install.json |
+| 官方shipping模型rollout | 修复后的共同配置一条16/16、R1，独立Snowflake进程重放一致 | runs/controlled_ablation_20261010/baseline/、baseline_independent_replay/ |
+| 真实Tinker优化 | 原4轨迹执行奖励产生非零优势，服务确认1次优化及checkpoint；随后一次加载checkpoint评估有效但未提交，R0，无提升证据 | runs/tinker_step_20261009_9b_resume_01/optimization_acknowledgement.json；runs/post_rl_eval_20261013/result.json |
+
+最新三组对照及代码ref见[实际结果](ablation_results_20261010.md)。共同配置满分来自base模型；压缩组未提交，年份组12/16且提示0次，不认定优化有效。下面按阶段保留历史证据：46/69/76是当时版本的测试数量，13/16是原始9B基线，不能替代本节当前摘要。
+
+训练后单次评估见[2026-10-13报告](post_training_evaluation_20261013.md)：同一任务/评分/环境配置、原生Python、首观察一致、实际加载同9B/rank16的原优化checkpoint；24模型轮/30工具、7 SQL编译错误、9011生成tokens、177.12秒，未提交因此不补评分或重放。源码摘要及费用/清理证据保留，未新增优化。本地临时Windows后备路径仅用于解决准备时的WMI阻塞，正式采样前系统服务和五源已恢复。
+
+## 原始环境与数据兼容证据（历史）
 
 原始固定 comparator 未修改；与材料源码的 SHA-256 完全相同。官方任务 data_model 与 5 个 schema 和固定 HF revision 一致：runs/version_audit.json。五个源数据 SHA/行数/类型/内容指纹及 driver Parquet 双来源一致性：runs/source_download_audit.json、runs/source_integrity_audit.json。
 
@@ -8,7 +22,7 @@
 
 本地测试覆盖真实 CSV/HTTP/Parquet、DuckDB load、SQL 错误修复、raw 内容核验、独立进程 replay、官方 comparator 的 extra-column/NULL/tolerance/row-order/duplicate 行为。2026-10-08 已进一步通过5个官方真实源读取、全链路DuckDB手工SQL诊断和独立进程replay；2模型/16要求列全部匹配v5 GT，reward=1。证据 runs/native_source_services.json、native_shipping_diagnostic/execution/grade.json、native_shipping_independent_replay/grade.json。它仍不是模型驱动的官方credentialed rollout。真实 Qwen3.5 tokenizer 和 cookbook renderer 测试使用 XML-style scripted tool actions，验证 token Env、action loss mask、logprobs 和 invalid group 排除；它没有采样模型或训练权重。
 
-最终回归结果为46项通过；最新本地运行记录保存在Git忽略的runs目录，不从脚本存在推定已经运行成功。wheel clean install 与独立目录测试记录在 runs/clean-*。个人恢复状态TASK_STATE.md仅本地保存。
+保留的v0.1真实验收版本回归为46项通过；v0.2候选另有新增检查，记录见下文。最新本地运行记录保存在Git忽略的runs目录，不从脚本存在推定已经运行成功。个人恢复状态TASK_STATE.md仅本地保存。
 
 ## Step 4：reward hacking
 
@@ -46,7 +60,7 @@ Snowflake 已通过真实公钥认证、五源加载、模型转换、独立重�
 - WSL已恢复默认Ubuntu-22.04-Recovered，Podman3.4.4运行本地源容器；5源均已验证。旧Ubuntu登记保留，避免注销误删同一磁盘。镜像按固定digest下载并核验，当前trusted本地容器未启用cgroup配额，正式扩大负载需合适资源限制。
 - 三项运行验收已有真实证据。预算账本约束全部运行的保守token与24小时checkpoint存储预留，不是服务端实时账单硬限额；warehouse/tax另计，实际账单可能延迟。
 - implementation design 已根据真实云运行更新，本地文档正在做提交前核对；正式 Google Doc、向教授提交和邮件尚未完成。私人通信、凭据、运行数据和操作员状态不上传实现仓库。
-- 当前 SQL 接口会拒绝合法的 models 限定目标以及部分日期/窗口表达式，查询日期默认反馈为 epoch-ms；这些限制与模型 SQL/业务语义错误分开记录。后续修复与反馈研究需固定官方 reward，不把接口修复当作算法创新，也不从离线诊断推定成功率提升。
+- v0.1的models限定目标/部分日期窗口误拒绝及epoch-ms反馈已在v0.2候选修复；其他函数仍按显式白名单支持。这些接口修复与模型SQL/业务语义错误分开记录。官方reward固定，不把接口修复当作算法创新，也不从离线诊断推定成功率提升。
 
 ## 2026-10-09 真实云验收
 
@@ -61,3 +75,27 @@ Snowflake 已通过真实公钥认证、五源加载、模型转换、独立重�
 SDK0.32 Datum/TensorData为dataclass；修复显式序列化后复用原整组实际轨迹和采样logprobs，创建同base/rank新初始learner进行importance_sampling，不宣称恢复了原client或重复采样。恢复receipt阻止同一预留重复更新。API确认返回9个训练logprob序列；optimizer额外metrics为空，未虚构梯度范数。服务端checkpoint大小567621237字节，最初24小时TTL；随后按用户选择延长7天，expires_at 为 2026-10-16T15:42:32.196595+00:00（北京时间2026-10-16 23:42）。本地 LoRA 备份不含优化器状态，不随云端TTL到期删除。
 
 真实数据mask核验：39631采样action tokens全部被训练，观察tokens的advantage为零。一个真实更新证明训练链路执行成功，尚未比较更新前后准确率。型号、提示和token上限在调试中变化，结果不构成受控消融或算法性能结论。
+
+## 2026-10-10 新版本本地和环境检查
+
+基线提交ab7a2fb/标签starter-baseline-20261010已推送到私有GitHub；运行代码与原9def90c一致。新代码在codex/reliability-feedback分支，保持main与基线标签。
+
+- v0.2修复阶段全套60项通过；字段开关阶段67项通过；静态审查另发现两项覆盖问题，已补唯一created_models状态、空表及重复调用回归，最终全套69项通过，记录为runs/new_version_20261010/tests_final.log。
+- wheel与sdist构建完成；从新venv安装wheel，在项目源码目录之外运行本地integration/独立子进程replay，正确R1、错误R0.75，启用字段反馈也不改变奖励。构建证据build_artifacts.json，独立安装证据wheel_integration/acceptance.json。
+- 真实Snowflake试用的人工local_sales fixture验证TO_DATE、FIRST_VALUE、EXISTS、ISO/原生类型、models目标、字段覆盖、终局重放R1及清理，证据snowflake_preflight/acceptance.json。它不是官方shipping、模型rollout或新的RL优化。
+- 原4条真实训练轨迹的51个transform输入，仅作离线策略解析：基线32个接受、候选43个接受，11个新增接受、0个新增拒绝。未执行这些SQL，未重新采样/评分；policy_comparison.json不能当成功率证据。
+- 最初字段选项本地同fixture各20次测量：关闭中位0.120304s、开启0.131632s，元数据检查中位0.002427s；约9.4%的观测开销包含日志与噪声，不能直接外推云端延迟。默认关闭，每次要求模型成功转换仅增加一个LIMIT 0查询。性能证据feedback_performance_summary.json及benchmark_feedback_off/on.json保留；这些结果不是新的模型A/B。
+- 最后P3修复后再次各10次测量：off0.126606s/on0.114016s，顺序与首轮相反；benchmark_final_off/on.json保留。小样本顺序测量不支持稳定的总耗时收益或退化判断，不选择更好的一轮声称提速；额外元数据查询及其phase耗时仍实际记录。
+- 新增GitHub Actions使用锁定本地依赖、固定Actions SHA、只读权限、构建wheel、无凭据测试及项目外独立replay。不安装Tinker/cookbook、不配置云凭据；可选测试的skip数会公开显示。只有实际workflow完成才能报告远程CI通过。
+
+在上述本地/人工预检阶段，尚未进行v0.2模型采样或新增训练。后续真实试运行见下一节和顶部当前摘要；新增采样不等于新增RL更新，也没有证明稳定成功率提升。
+
+## 2026-10-10 真实试运行与上下文修复
+
+v0.2另完成两条真实官方shipping模型rollout：关闭field feedback在20轮因context_overflow未submit/R0；开启模式16轮submit/R0.9375（15/16），独立Snowflake进程重放相同。唯一错误drivers.num_shipments_2017使用COUNT(*)统计全部年份；这些各一次随机样本不能证明反馈效果。private evidence为runs/v2_paid_test_20261010/results.json，原共同预算累计保守预留8.905724928美元，未超过10美元，未追加RL更新。
+
+v0.3用默认关闭的compact选项限制模型视图、显示固定cookbook真实轮数，并以128替代全额生成token的提前终止预留；真实completer的context clipping和原费用上界仍生效。没有删历史或人工提交；raw工具trace与实际模型messages分开保留。公开年份review仅读spec，非阻塞、不改reward；间接年份表达式和无关literal均为限制。
+
+离线重渲染原始off历史：最终prompt21460tokens，compact16232，减少5228；原4096预留触发overflow，compact的128预留不触发。on历史18462→15871。typed ToolCall从真实已保存action_tokens恢复，没有eval repr；这些修改后的观察及旧logprobs没有用于训练。证据runs/context_fix_20261010/offline_diagnosis.json；不是新采样或成功率证据。
+
+76项本地回归/Ruff通过，包含真实DuckDB+native renderer的大结果截断、显式提交、两模式action-only mask/logprobs及completer上下文裁剪。Standards/Spec两轴未发现阻塞；局部code-simplification审查未要求扩大重构，保留固定桥接边界。依赖/upstream/evaluator无修改。真实效果应单独按预算验证。

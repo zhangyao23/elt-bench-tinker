@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, default=10)
+    parser.add_argument("--field-feedback", action="store_true")
     args = parser.parse_args()
     timings, peaks = [], []
     with tempfile.TemporaryDirectory() as temporary:
@@ -23,7 +24,7 @@ def main():
         for index in range(args.repetitions):
             tracemalloc.start()
             start = time.perf_counter()
-            episode = Episode(task, "duckdb", Path(temporary) / str(index))
+            episode = Episode(task, "duckdb", Path(temporary) / str(index), field_feedback=args.field_feedback)
             try:
                 load_all(episode)
                 assert episode.act("transform", {"sql": GOOD_SQL})["ok"]
@@ -43,6 +44,7 @@ def main():
     report = {
         "scope": "small local fixture; DuckDB/CSV execution only",
         "repetitions": args.repetitions,
+        "field_feedback": args.field_feedback,
         "median_seconds": statistics.median(t["total"] for t in timings),
         "median_grading_seconds": statistics.median(t["grade"] for t in timings),
         "median_python_peak_bytes": statistics.median(peaks),
