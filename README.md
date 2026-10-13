@@ -37,6 +37,6 @@ Recommended rollout: public model, field coverage enabled, compaction and year h
 - SQL restrictions, warehouse roles and episode schemas protect credentials and references. Shared Snowflake-role isolation partly relies on AST checks; public benchmark memorization remains possible.
 - Native loading replaces the paper's Airbyte control plane. This starter does not claim full-benchmark replication, a new RL algorithm or proven optimization benefits.
 
-[Document index](docs/README.md) · [中文操作说明](docs/operator_guide.md) · [Historical records](docs/archive/README.md) · [Pinned sources and licenses](THIRD_PARTY.md)
+[Document index](docs/README.md) · [Historical records](docs/archive/README.md) · [Pinned sources and licenses](THIRD_PARTY.md)
 
 Credentials, private run traces, downloaded task data, professor communications and personal records are excluded from Git. The repository remains private; publication and professor access are the owner's decision.
