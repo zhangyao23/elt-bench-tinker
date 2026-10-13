@@ -1,5 +1,7 @@
 # 版本0.2代码审查
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 固定点为starter-baseline-20261010（ab7a2fb）。Standards与Spec按code-review指南独立审查1326ab6和b204ae2；后续0b1091e处理覆盖问题。范围为SQL兼容、日期/状态反馈、公开字段开关、CLI/cookbook传播和无凭据CI，未将未执行的模型A/B当作已经完成的实验。
 
 ## Standards

@@ -4,7 +4,7 @@
 
 The implementation covers official **shipping** with five native source readers, Snowflake execution and a Tinker RL recipe. DuckDB provides credential-free integration. Start with [implementation design](implementation_design.md), then use the commands below. Detailed experiment results are in [the three-arm report](ablation_results_20261010.md); upstream revisions and licenses are in [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-Run evidence: original RL acceptance code `9def90c`; three-arm rollout/interface code `0699e18`; recorded comparison results `ab4dc8c`, on branch `codex/reliability-feedback`. The checkpoint evaluation entry was added on 13 October and its runtime hashes are retained with the new result. Documentation-only revisions do not count as additional experiments. The preserved main/tag remains the earlier baseline.
+Run evidence: original RL acceptance code `9def90c`; three-arm rollout/interface code `0699e18`; recorded comparison results `ab4dc8c`, in the preserved experiment history. The checkpoint evaluation entry was added on 13 October and its runtime hashes are retained with the new result. Documentation-only revisions do not count as additional experiments. The default `main` branch is the maintained reviewer entry. `starter-delivery-20261013` preserves the frozen 0.3.1 release; `starter-baseline-20261010` preserves the earlier baseline. See the [document index](README.md) for current reports and archived stage records.
 
 | Acceptance check | Evidence and scope |
 |---|---|

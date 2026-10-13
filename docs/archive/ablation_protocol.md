@@ -1,5 +1,7 @@
 # 上下文压缩与年份提示的控制变量试运行
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 用户于2026-10-10授权：Tinker累计总上限提高到US$12，以下三组各一次；Snowflake继续只用试用额度。
 
 | 组 | 字段覆盖反馈 | 上下文压缩 | 年份提示 |

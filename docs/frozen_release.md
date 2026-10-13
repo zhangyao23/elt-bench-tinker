@@ -1,6 +1,6 @@
 # Frozen starter submission — 13 October 2026
 
-Release tag: `starter-delivery-20261013`. Package: `elt-tinker 0.3.1`. The tag identifies the submitted code and documentation; original experiment revisions remain listed below. The original main branch and baseline tags are preserved.
+Release tag: `starter-delivery-20261013`. Package: `elt-tinker 0.3.1`. The tag identifies the frozen code and documentation; original experiment revisions remain listed below. The earlier main revision is preserved by `starter-baseline-20261010`. The default main branch may receive documentation maintenance; the frozen tag remains unchanged.
 
 ## Scope and recommended configuration
 
@@ -44,6 +44,6 @@ Raw data, credentials, private run traces, professor communications and checkpoi
 
 ## Reviewer entry and handoff
 
-Start with [implementation_design.md](implementation_design.md) and [reviewer_guide.md](reviewer_guide.md). [verification.md](verification.md) separates current validation from historical evidence. [change_and_experiment_log.md](change_and_experiment_log.md) records fixes and unsuccessful candidates.
+Start with [implementation_design.md](implementation_design.md) and [reviewer_guide.md](reviewer_guide.md). [verification.md](verification.md) separates current validation from historical evidence. [archived change and experiment log](archive/change_and_experiment_log.md) records fixes and unsuccessful candidates.
 
 No additional paid experiments or checkpoint extensions are part of this freeze. The operator's checkpoint retains the previously approved expiry; a reviewer can run a new small training group using their own approved resources. The repository remains private until the owner decides access and publication. Native Google Doc content/access and the professor's repository access must be confirmed before the owner sends the final message.

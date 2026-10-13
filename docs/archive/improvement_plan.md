@@ -1,5 +1,7 @@
 # ELT Bench 提交前改进计划
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 目标是在2026年10月12日周一前形成可靠、可复现、能解释设计理由的交付版本。先修复已经复现的环境接口问题，再评估一个可关闭的反馈改进。官方任务、源数据、终局评分及训练目标保持固定；这份计划尚未作为新的实验结果。
 
 采用小提交、自动化测试、隔离测试环境、小规模试运行和明确回退方式。这个做法参考 [Google SRE 发布工程与 canary 原则](https://sre.google/workbook/canarying-releases/) 和 [GitHub 检查门禁](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)。本项目用专用测试 warehouse 做受控试运行，没有生产用户流量，不将其描述成已经部署的生产 canary。

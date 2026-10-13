@@ -1,5 +1,7 @@
 # 修改与实验记录
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 更新：2026-10-13。按“修改了什么 → 为了解决什么问题 → 实际结果”记录主要变化。最初8项是历史记录，不代表8个独立版本或8次对照实验；第7、8项一起测试。第9项为三组对照，第10项为之后的一次训练后评估；历史条目中的“未评估”描述当时状态。文档整理不计作模型优化。
 
 ## 1. 首轮静态审查后的运行与安全修复
@@ -7,7 +9,7 @@
 - **修改了什么：**新增跨运行共享的费用预留账本；等待同组已发出的任务结束后再清理；将可修复SQL错误返回给模型；Snowflake使用managed access schema授予限定权限；分别记录“运行有效、已提交、任务全对”。最终归入提交`9def90c`。
 - **为了解决什么问题：**单次预算限制不能防止累计超支；并发任务可能在清理后继续操作数据库；SQL错误被错误地视为基础设施故障；原Snowflake授权流程缺权限；部分正确的有效rollout被误报为运行失败。
 - **实际结果：**当时43项本地测试和Lint通过；后续真实Snowflake权限预检验证raw读权限与写入限制。修复了可运行性与记录方式，没有证明模型成功率提高。
-- **证据：**`docs/static_review.md`；`runs/static_review_regression_20261009.log`；`runs/snowflake_rbac_preflight.json`。
+- **证据：**`docs/archive/static_review.md`；`runs/static_review_regression_20261009.log`；`runs/snowflake_rbac_preflight.json`。
 
 ## 2. 早期模型运行中的提示与参数调整
 
@@ -42,7 +44,7 @@
 - **修改了什么：**从成功SQL中记录唯一`created_models`；增加空表字段齐全、重复创建同一模型的回归测试。提交`0b1091e`。
 - **为了解决什么问题：**成功SQL数量无法说明哪张输出表已经建立；“列齐全”可能被误解为“数据正确”；重复执行可能让进度显示失真。
 - **实际结果：**本地验证空表即使列齐全仍R0；重复转换记录2条成功SQL、1个模型，正确结果仍R1。最终69项测试通过。此项与第5项一起进入v0.2付费试运行，没有单独模型对照，不能单独声称改善提交行为。
-- **证据：**`docs/review_v0_2.md`；`tests/test_feedback.py`；`runs/new_version_20261010/tests_final.log`。
+- **证据：**`docs/archive/review_v0_2.md`；`tests/test_feedback.py`；`runs/new_version_20261010/tests_final.log`。
 
 ## 7. v0.3：压缩工具反馈，显示真实模型轮数并提醒提交
 

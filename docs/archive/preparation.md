@@ -1,5 +1,7 @@
 # 接续真实验收：准备工作
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 先准备本地源服务，再接入 Snowflake 与 Tinker；身份核验不等于模型 rollout/优化。运行前明确可用额度和费用上限；本仓库不附带账号、凭据或消费授权。
 
 ## 本地运行路线

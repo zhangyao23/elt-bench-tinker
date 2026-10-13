@@ -1,5 +1,7 @@
 # 真实运行前静态审查（2026-10-09）
 
+> Archived on 13 October 2026. This document records its original stage; dates, budgets and pending work below are historical. Current scope and results: [frozen release](../frozen_release.md), [verification](../verification.md). Commands run from the repository root.
+
 范围：初始提交f0f94d6的完整实现；从实现规范（Standards）和教授要求（Spec）两条独立审查线检查。模型采样与优化前完成修复、回归和实际destination预检。只读账号检查不计作官方rollout。
 
 ## Standards
